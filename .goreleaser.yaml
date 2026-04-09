@@ -1,0 +1,62 @@
+# .goreleaser.yaml
+#
+# goreleaser configuration for mosaic. Triggered by `git push --tags`
+# via the release GitHub Action; runs locally with `goreleaser
+# release --snapshot --clean` to dry-run the pipeline.
+#
+# Cross-platform archives (darwin + linux, arm64 + amd64) attached
+# to GitHub Releases.
+version: 2
+
+project_name: mosaic
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: mosaic
+    main: ./cmd/mosaic
+    binary: mosaic
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - id: default
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - LICENSE*
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev+{{ .ShortCommit }}"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+
+release:
+  github:
+    owner: Mizune
+    name: mosaic
+  draft: false
+  prerelease: auto
+  name_template: "mosaic {{.Version}}"
