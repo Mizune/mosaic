@@ -125,10 +125,15 @@ type AttentionSection struct {
 	// fresh attention is detected.
 	NotifyOS bool `toml:"notify_os"`
 
-	// Sound rings the terminal bell on new attention events.
-	// Complementary to NotifyOS so users on systems without a
-	// notification daemon still get an audible cue.
+	// Sound plays an audible cue on new attention events.
+	// On macOS the system alert sound is used by default;
+	// on Linux the terminal bell is used as a fallback.
 	Sound bool `toml:"sound"`
+
+	// SoundFile overrides the default sound with a custom audio
+	// file (e.g. "/System/Library/Sounds/Glass.aiff"). When set,
+	// afplay (macOS) or paplay (Linux) is used to play it.
+	SoundFile string `toml:"sound_file"`
 }
 
 // TmuxSection holds the [tmux] table.

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -35,15 +36,32 @@ func notifyOS(title, body string) {
 	// fall through silently.
 }
 
-// ringBell writes an ASCII BEL to stdout so the terminal either
-// flashes or beeps, depending on the user's terminal settings.
-// This is cheap and platform-agnostic, so it stays the default
-// "audio" path rather than wiring to a sound library.
-func ringBell() {
-	// Writing to stderr avoids interfering with Bubble Tea's
-	// stdout alt-screen buffer; terminals still honour BEL on
-	// stderr.
-	_, _ = exec.Command("printf", "\a").Output()
+// playSound plays an audible notification. When soundFile is
+// non-empty, afplay (macOS) or paplay (Linux) plays that file.
+// Otherwise the system default is used: osascript beep on macOS,
+// terminal BEL on Linux.
+func playSound(soundFile string) {
+	if soundFile != "" {
+		playCustomSound(soundFile)
+		return
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		_ = exec.Command("osascript", "-e", "beep").Start()
+	case "linux":
+		_, _ = os.Stderr.Write([]byte("\a"))
+	}
+}
+
+// playCustomSound plays an arbitrary audio file via the platform's
+// CLI player. Unrecognised platforms are silently ignored.
+func playCustomSound(path string) {
+	switch runtime.GOOS {
+	case "darwin":
+		_ = exec.Command("afplay", path).Start()
+	case "linux":
+		_ = exec.Command("paplay", path).Start()
+	}
 }
 
 // escapeAppleScript escapes double quotes and backslashes so the
