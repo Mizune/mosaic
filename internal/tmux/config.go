@@ -27,6 +27,11 @@ bind-key d detach-client
 # Keep ESC snappy in editors running inside a session.
 set -sg escape-time 10
 
+# Allow OSC escape sequences (status line, notifications, etc.)
+# to pass through tmux to the outer terminal. Without this,
+# Claude Code's status line and similar features are invisible.
+set -g allow-passthrough on
+
 # Larger scrollback so capture-pane can pick up long tool outputs.
 set -g history-limit 50000
 
