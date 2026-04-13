@@ -853,7 +853,7 @@ func (m *Model) fireAttentionNotification(sessionName, title, body string) {
 		go notifyOS(t, body)
 	}
 	if m.config.UI.Attention.Sound {
-		go ringBell()
+		go playSound(m.config.UI.Attention.SoundFile)
 	}
 }
 
@@ -1006,7 +1006,11 @@ func (m *Model) rebuildRows() {
 		// Sort sessions inside a group: attention → error → running → idle
 		grp := append([]store.Session{}, groups[name]...)
 		sort.SliceStable(grp, func(i, j int) bool {
-			return statusRank(grp[i]) < statusRank(grp[j])
+			ri, rj := statusRank(grp[i]), statusRank(grp[j])
+			if ri != rj {
+				return ri < rj
+			}
+			return grp[i].Name < grp[j].Name
 		})
 		for _, s := range grp {
 			rows = append(rows, displayRow{Session: s})
