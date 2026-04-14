@@ -18,6 +18,7 @@ import (
 	"github.com/Mizune/mosaic/internal/bus"
 	"github.com/Mizune/mosaic/internal/claudeio"
 	"github.com/Mizune/mosaic/internal/config"
+	"github.com/Mizune/mosaic/internal/selfupdate"
 	"github.com/Mizune/mosaic/internal/service"
 	"github.com/Mizune/mosaic/internal/store"
 	"github.com/Mizune/mosaic/internal/tui/theme"
@@ -245,6 +246,11 @@ type Model struct {
 	// summary on the right pane. Cycled with Tab on the TOP
 	// screen.
 	previewMode previewMode
+
+	// availableUpdate is non-empty when a background check
+	// found a newer version on GitHub Releases. Rendered in
+	// the header next to the version badge.
+	availableUpdate string
 }
 
 // previewMode enumerates the right-pane layouts the user can
@@ -455,6 +461,7 @@ func (m *Model) Init() tea.Cmd {
 		tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) }),
 		tea.Tick(120*time.Millisecond, func(t time.Time) tea.Msg { return spinnerTickMsg(t) }),
 		m.waitForBusEvent(),
+		checkUpdateCmd(version, m.config.Mosaic.DisableUpdateCheck),
 	)
 }
 
@@ -516,6 +523,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.error = ""
 		}
+
+	case updateAvailableMsg:
+		if v.latest != "" {
+			m.availableUpdate = v.latest
+		}
+		return m, nil
 
 	case tickMsg:
 		// Re-fetch sessions on every tick so the live LAST_ACTIVE
@@ -825,6 +838,32 @@ func (m *Model) fireAttentionDiffs(next []store.Session) {
 func (m *Model) setTopToast(text string) {
 	m.topToast = text
 	m.topToastExpires = time.Now().Add(3 * time.Second)
+}
+
+// updateAvailableMsg is sent by the background update check when
+// a newer version exists on GitHub Releases.
+type updateAvailableMsg struct {
+	latest string
+}
+
+// checkUpdateCmd returns a tea.Cmd that queries GitHub Releases
+// for a newer version. It returns nil on error, on "dev" builds,
+// or when already up-to-date so the TUI never shows a spurious
+// notification.
+func checkUpdateCmd(currentVersion string, disabled bool) tea.Cmd {
+	if disabled || currentVersion == "dev" {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		u := selfupdate.New(currentVersion)
+		result, err := u.Check(ctx)
+		if err != nil || !result.UpdateAvail {
+			return nil
+		}
+		return updateAvailableMsg{latest: result.Latest}
+	}
 }
 
 // logError appends an error entry to the ring buffer that backs
