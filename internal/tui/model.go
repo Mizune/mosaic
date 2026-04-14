@@ -9,6 +9,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"time"
 
@@ -611,6 +612,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.flagError("fork failed", v.err)
 		return m, nil
 
+	case respawnResultMsg:
+		if len(v.failed) > 0 {
+			m.setTopToast(fmt.Sprintf("respawned %d/%d (%d failed)", v.success, v.total, len(v.failed)))
+			for _, f := range v.failed {
+				m.flagError("respawn failed", f)
+			}
+		} else {
+			m.setTopToast(fmt.Sprintf("respawned %d session(s)", v.success))
+		}
+		m.selected = map[string]bool{}
+		return m, m.refreshCmd()
+
 	case dismissToastMsg:
 		m.setTopToast("dismissed " + v.name)
 		return m, m.refreshCmd()
@@ -959,9 +972,13 @@ func (m *Model) applyAttentionHint(ctx context.Context, s store.Session, capture
 // fresh refresh — never a slice derived from [Model.rows], because
 // that list contains sub-agent entries whose .Session field
 // duplicates the parent.
-func (m *Model) applySessions(sessions []store.Session, _ []string) {
+func (m *Model) applySessions(sessions []store.Session, missing []string) {
 	m.lastSessions = append(m.lastSessions[:0], sessions...)
 	m.rebuildRows()
+	if len(missing) > 0 {
+		m.setTopToast(fmt.Sprintf(
+			"%d session(s) stopped (tmux gone) — r to respawn", len(missing)))
+	}
 }
 
 // rebuildRows re-computes [Model.rows] from the cached session list
