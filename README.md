@@ -83,6 +83,13 @@ vhs docs/assets/diff-view.tape    # Diff View + hunk stage + commit
 
 ## Install
 
+### Homebrew (recommended)
+
+```bash
+brew install Mizune/tap/mosaic
+mosaic doctor
+```
+
 ### Pre-built binaries
 
 Download the latest release from the
