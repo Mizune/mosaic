@@ -272,6 +272,66 @@ func (s *SessionService) Kill(ctx context.Context, name string) error {
 	return nil
 }
 
+// RespawnResult reports the outcome of a single session respawn attempt.
+type RespawnResult struct {
+	Name    string
+	Success bool
+	Err     string // empty on success
+}
+
+// doRespawn recreates the tmux session for a database row whose
+// backing tmux process has disappeared. It is idempotent: if the
+// tmux session already exists, it returns nil immediately.
+//
+// Both [AttachCommand] and [Respawn] delegate here so the respawn
+// logic lives in exactly one place.
+func (s *SessionService) doRespawn(ctx context.Context, row store.Session) error {
+	exists, err := s.tmux.HasSession(ctx, row.TmuxSession)
+	if err != nil {
+		return fmt.Errorf("tmux check: %w", err)
+	}
+	if exists {
+		return nil
+	}
+
+	// Worktree path must exist before we ask tmux to cd
+	// into it, otherwise the spawn fails with an opaque
+	// "no such file or directory" and the user is left
+	// staring at an unlabelled error.
+	if row.WorktreePath != "" {
+		if info, statErr := os.Stat(row.WorktreePath); statErr != nil || !info.IsDir() {
+			return fmt.Errorf(
+				"worktree path does not exist: %s — delete the row with `mosaic kill %s` or recreate the directory",
+				row.WorktreePath, row.Name)
+		}
+	}
+
+	tool := store.SessionTool(row.Tool)
+	const respawn = true
+	launchCmd := LaunchCommandForSession(tool, row.WorktreePath, s.flagsFor(tool), respawn)
+	if err := s.tmux.NewSession(ctx, tmux.NewSessionOptions{
+		Name:       row.TmuxSession,
+		WorkingDir: row.WorktreePath,
+		Command:    launchCmd,
+		Env:        s.hookEnv(row),
+	}); err != nil {
+		return fmt.Errorf("respawn tmux session %q in %s: %w",
+			row.TmuxSession, row.WorktreePath, err)
+	}
+
+	// Respawned sessions that were previously "stopped" need
+	// to come back as idle, not running — the pane is fresh
+	// and nothing is active yet. The reconciler will upgrade
+	// them on real activity.
+	if row.Status == string(store.StatusStopped) {
+		_ = s.store.Sessions().UpdateStatus(ctx, row.ID, store.StatusIdle)
+	}
+	if s.bus != nil {
+		s.bus.Publish(bus.SessionStarted{SessionID: row.ID, At: time.Now()})
+	}
+	return nil
+}
+
 // AttachCommand returns an *exec.Cmd that hands the caller's
 // terminal to tmux. Cobra commands set stdin/stdout/stderr to os.*
 // and call Run() on the returned command.
@@ -285,45 +345,44 @@ func (s *SessionService) AttachCommand(ctx context.Context, name string) (*exec.
 	if err != nil {
 		return nil, err
 	}
-	exists, err := s.tmux.HasSession(ctx, row.TmuxSession)
-	if err != nil {
-		return nil, fmt.Errorf("tmux check: %w", err)
-	}
-	if !exists {
-		// Worktree path must exist before we ask tmux to cd
-		// into it, otherwise the spawn fails with an opaque
-		// "no such file or directory" and the user is left
-		// staring at an unlabelled error.
-		if row.WorktreePath != "" {
-			if info, statErr := os.Stat(row.WorktreePath); statErr != nil || !info.IsDir() {
-				return nil, fmt.Errorf(
-					"worktree path does not exist: %s — delete the row with `mosaic kill %s` or recreate the directory",
-					row.WorktreePath, name)
-			}
-		}
-
-		launchCmd := LaunchCommandForSession(store.SessionTool(row.Tool), row.WorktreePath, s.flagsFor(store.SessionTool(row.Tool)), true)
-		if err := s.tmux.NewSession(ctx, tmux.NewSessionOptions{
-			Name:       row.TmuxSession,
-			WorkingDir: row.WorktreePath,
-			Command:    launchCmd,
-			Env:        s.hookEnv(row),
-		}); err != nil {
-			return nil, fmt.Errorf("respawn tmux session %q in %s: %w",
-				row.TmuxSession, row.WorktreePath, err)
-		}
-		// Respawned sessions that were previously "stopped" need
-		// to come back as idle, not running — the pane is fresh
-		// and nothing is active yet. The reconciler will upgrade
-		// them on real activity.
-		if row.Status == string(store.StatusStopped) {
-			_ = s.store.Sessions().UpdateStatus(ctx, row.ID, store.StatusIdle)
-		}
-		if s.bus != nil {
-			s.bus.Publish(bus.SessionStarted{SessionID: row.ID, At: time.Now()})
-		}
+	if err := s.doRespawn(ctx, row); err != nil {
+		return nil, err
 	}
 	return s.tmux.AttachCommand(row.TmuxSession), nil
+}
+
+// Respawn recreates the tmux session for a stopped session without
+// attaching to it. It is idempotent: calling Respawn on a session
+// whose tmux backend is already alive is a no-op.
+func (s *SessionService) Respawn(ctx context.Context, name string) error {
+	row, err := s.store.Sessions().GetByName(ctx, name)
+	if err != nil {
+		return err
+	}
+	return s.doRespawn(ctx, row)
+}
+
+// RespawnAll respawns every stopped session, returning per-session
+// results. Sessions that are already alive are skipped.
+// Unrecoverable sessions (e.g. missing worktree) are reported as
+// failures but do not abort the batch.
+func (s *SessionService) RespawnAll(ctx context.Context) ([]RespawnResult, error) {
+	rows, err := s.store.Sessions().List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	var results []RespawnResult
+	for _, row := range rows {
+		if row.Status != string(store.StatusStopped) {
+			continue
+		}
+		if err := s.doRespawn(ctx, row); err != nil {
+			results = append(results, RespawnResult{Name: row.Name, Err: err.Error()})
+		} else {
+			results = append(results, RespawnResult{Name: row.Name, Success: true})
+		}
+	}
+	return results, nil
 }
 
 // ListResult bundles a session row with the live status reconciled
