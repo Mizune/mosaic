@@ -25,6 +25,12 @@ const (
 	settingTheme
 	settingNotifyOS
 	settingSound
+	// Discord section.
+	settingDiscordEnabled
+	settingDiscordChannelID
+	settingDiscordGuildID
+	settingDiscordNotifyStop
+	settingDiscordNotifyAttention
 	settingCount
 )
 
@@ -34,19 +40,26 @@ const (
 type editableSetting struct {
 	field   settingsField
 	label   string
-	kind    string   // "enum" or "bool"
+	kind    string   // "enum", "bool", or "text"
 	options []string // for enum kind
+	section string   // section header to render before this field
 }
 
 var settingsSchema = []editableSetting{
 	{settingDefaultTool, "default_tool", "enum",
-		[]string{"claude", "codex", "gemini", "shell"}},
+		[]string{"claude", "codex", "gemini", "shell"}, "General"},
 	{settingLogLevel, "log_level", "enum",
-		[]string{"debug", "info", "warn", "error"}},
+		[]string{"debug", "info", "warn", "error"}, ""},
 	{settingTheme, "theme", "enum",
-		[]string{"catppuccin-mocha", "catppuccin-latte", "tokyo-night", "tokyo-night-storm", "system"}},
-	{settingNotifyOS, "attention.notify_os", "bool", nil},
-	{settingSound, "attention.sound", "bool", nil},
+		[]string{"catppuccin-mocha", "catppuccin-latte", "tokyo-night", "tokyo-night-storm", "system"}, ""},
+	{settingNotifyOS, "attention.notify_os", "bool", nil, ""},
+	{settingSound, "attention.sound", "bool", nil, ""},
+	// Discord section.
+	{settingDiscordEnabled, "discord.enabled", "bool", nil, "Discord"},
+	{settingDiscordChannelID, "discord.channel_id", "text", nil, ""},
+	{settingDiscordGuildID, "discord.guild_id", "text", nil, ""},
+	{settingDiscordNotifyStop, "discord.notify_on_stop", "bool", nil, ""},
+	{settingDiscordNotifyAttention, "discord.notify_on_attention", "bool", nil, ""},
 }
 
 // settingsCursor is the row index in settingsSchema that is
@@ -63,6 +76,11 @@ func (m *Model) settingsCursor() int {
 
 // updateSettings handles keystrokes on the Settings screen.
 func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Text editing mode: capture all keys for the text buffer.
+	if m.settingsTextEditing {
+		return m.updateSettingsTextInput(msg)
+	}
+
 	switch msg.String() {
 	case "q", "esc":
 		m.settingsUnsaved = false
@@ -80,6 +98,12 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "enter", " ", "l", "right":
+		s := settingsSchema[m.settingsCursor()]
+		if s.kind == "text" {
+			m.settingsTextEditing = true
+			m.settingsTextBuf = m.currentSettingValue(s.field)
+			return m, nil
+		}
 		m.cycleSettingForward()
 		return m, nil
 	case "h", "left":
@@ -91,18 +115,46 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// updateSettingsTextInput handles keystrokes while editing a text
+// field in settings.
+func (m *Model) updateSettingsTextInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		// Commit the text value.
+		s := settingsSchema[m.settingsCursor()]
+		m.applySettingValue(s.field, m.settingsTextBuf)
+		m.settingsTextEditing = false
+		m.settingsUnsaved = true
+		return m, nil
+	case "esc":
+		// Cancel editing.
+		m.settingsTextEditing = false
+		return m, nil
+	case "backspace":
+		if runes := []rune(m.settingsTextBuf); len(runes) > 0 {
+			m.settingsTextBuf = string(runes[:len(runes)-1])
+		}
+		return m, nil
+	case "ctrl+u":
+		m.settingsTextBuf = ""
+		return m, nil
+	default:
+		// Append printable characters.
+		r := msg.String()
+		if len(r) == 1 && r[0] >= 32 && r[0] < 127 {
+			m.settingsTextBuf += r
+		}
+		return m, nil
+	}
+}
+
 // cycleSettingForward advances the highlighted field to its
 // next value (next enum option, or toggling a bool).
 func (m *Model) cycleSettingForward() {
 	s := settingsSchema[m.settingsCursor()]
 	switch s.kind {
 	case "bool":
-		switch s.field {
-		case settingNotifyOS:
-			m.config.UI.Attention.NotifyOS = !m.config.UI.Attention.NotifyOS
-		case settingSound:
-			m.config.UI.Attention.Sound = !m.config.UI.Attention.Sound
-		}
+		m.toggleBoolSetting(s.field)
 	case "enum":
 		current := m.currentSettingValue(s.field)
 		next := nextInList(s.options, current)
@@ -126,8 +178,24 @@ func (m *Model) cycleSettingBackward() {
 	}
 }
 
-// currentSettingValue returns the string value of an enum
-// setting so the cycle helpers can find its place in the list.
+// toggleBoolSetting flips a bool config value.
+func (m *Model) toggleBoolSetting(f settingsField) {
+	switch f {
+	case settingNotifyOS:
+		m.config.UI.Attention.NotifyOS = !m.config.UI.Attention.NotifyOS
+	case settingSound:
+		m.config.UI.Attention.Sound = !m.config.UI.Attention.Sound
+	case settingDiscordEnabled:
+		m.config.Discord.Enabled = !m.config.Discord.Enabled
+	case settingDiscordNotifyStop:
+		m.config.Discord.NotifyOnStop = !m.config.Discord.NotifyOnStop
+	case settingDiscordNotifyAttention:
+		m.config.Discord.NotifyOnAttention = !m.config.Discord.NotifyOnAttention
+	}
+}
+
+// currentSettingValue returns the string value of a setting so
+// the cycle/text helpers can read it.
 func (m *Model) currentSettingValue(f settingsField) string {
 	switch f {
 	case settingDefaultTool:
@@ -136,13 +204,15 @@ func (m *Model) currentSettingValue(f settingsField) string {
 		return m.config.Mosaic.LogLevel
 	case settingTheme:
 		return m.config.UI.Theme
+	case settingDiscordChannelID:
+		return m.config.Discord.ChannelID
+	case settingDiscordGuildID:
+		return m.config.Discord.GuildID
 	}
 	return ""
 }
 
-// applySettingValue writes a new enum value back into the
-// running Model.config and, for theme, repoints the live
-// theme pointer so the change is visible immediately.
+// applySettingValue writes a value back into the running config.
 func (m *Model) applySettingValue(f settingsField, value string) {
 	switch f {
 	case settingDefaultTool:
@@ -152,6 +222,10 @@ func (m *Model) applySettingValue(f settingsField, value string) {
 	case settingTheme:
 		m.config.UI.Theme = value
 		m.theme = theme.ByName(value)
+	case settingDiscordChannelID:
+		m.config.Discord.ChannelID = value
+	case settingDiscordGuildID:
+		m.config.Discord.GuildID = value
 	}
 }
 
@@ -236,18 +310,39 @@ func (m *Model) renderSettings() string {
 
 	var sections []string
 
-	// --- Editable ----------------------------------------------------
+	// --- Editable fields (grouped by section) ---
 	cursor := m.settingsCursor()
-	editLines := []string{m.theme.SectionTitle.Render("General (editable)")}
+	var editLines []string
+	lastSection := ""
 	for i, s := range settingsSchema {
+		// Render section header when it changes.
+		if s.section != "" && s.section != lastSection {
+			if len(editLines) > 0 {
+				editLines = append(editLines, "")
+			}
+			editLines = append(editLines, m.theme.SectionTitle.Render(s.section))
+			lastSection = s.section
+		}
+
 		marker := "  "
 		if i == cursor {
-			marker = m.theme.AttentionTag.Render("▶ ")
+			marker = m.theme.AttentionTag.Render("> ")
 		}
+
 		value := m.settingValueAsString(s)
+		// Show text editing state.
+		if i == cursor && m.settingsTextEditing {
+			value = m.settingsTextBuf + m.theme.AttentionTag.Render("|")
+		}
+
 		editLines = append(editLines,
-			fmt.Sprintf("%s%-20s : %s", marker, s.label, value))
+			fmt.Sprintf("%s%-28s : %s", marker, s.label, value))
 	}
+
+	// Token hint (not editable in TUI for security).
+	editLines = append(editLines, "")
+	editLines = append(editLines,
+		m.theme.MutedText.Render("  token: set MOSAIC_DISCORD_TOKEN env var"))
 	sections = append(sections, strings.Join(editLines, "\n"))
 
 	// --- Hooks -------------------------------------------------------
@@ -260,9 +355,9 @@ func (m *Model) renderSettings() string {
 		inst := hook.NewInstaller(hookPath)
 		if installed, err := inst.IsInstalled(); err == nil {
 			if installed {
-				hookStatus = "✓ installed"
+				hookStatus = "installed"
 			} else {
-				hookStatus = "✗ not installed"
+				hookStatus = "not installed"
 			}
 		} else {
 			hookStatus = "error: " + err.Error()
@@ -285,12 +380,14 @@ func (m *Model) renderSettings() string {
 	}, "\n"))
 
 	// --- Footer ------------------------------------------------------
-	hint := "j/k: move  •  Enter/␣/h/l: cycle  •  Ctrl+S: save  •  q/Esc: close"
-	if m.settingsUnsaved {
-		hint = m.theme.AttentionTag.Render("unsaved") + "  •  " + hint
+	hint := "j/k: move  Enter: edit  h/l: cycle  Ctrl+S: save  q: close"
+	if m.settingsTextEditing {
+		hint = m.theme.AttentionTag.Render("EDITING") + "  Enter: confirm  Esc: cancel  Ctrl+U: clear"
+	} else if m.settingsUnsaved {
+		hint = m.theme.AttentionTag.Render("unsaved") + "  " + hint
 	}
 	if m.settingsError != "" {
-		hint = m.theme.AttentionTag.Render("✗ "+m.settingsError) + "  •  " + hint
+		hint = m.theme.AttentionTag.Render("! "+m.settingsError) + "  " + hint
 	}
 
 	body := strings.Join(sections, "\n\n") + "\n\n" + m.theme.MutedText.Render(hint)
@@ -317,6 +414,16 @@ func (m *Model) settingValueAsString(s editableSetting) string {
 		return boolStr(m.config.UI.Attention.NotifyOS)
 	case settingSound:
 		return boolStr(m.config.UI.Attention.Sound)
+	case settingDiscordEnabled:
+		return boolStr(m.config.Discord.Enabled)
+	case settingDiscordChannelID:
+		return ifEmpty(m.config.Discord.ChannelID, "(not set)")
+	case settingDiscordGuildID:
+		return ifEmpty(m.config.Discord.GuildID, "(not set)")
+	case settingDiscordNotifyStop:
+		return boolStr(m.config.Discord.NotifyOnStop)
+	case settingDiscordNotifyAttention:
+		return boolStr(m.config.Discord.NotifyOnAttention)
 	}
 	return ""
 }

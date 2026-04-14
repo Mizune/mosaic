@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
+	"os"
 
 	"github.com/Mizune/mosaic/internal/bus"
 	"github.com/Mizune/mosaic/internal/claudeio"
 	"github.com/Mizune/mosaic/internal/config"
+	"github.com/Mizune/mosaic/internal/discord"
 	"github.com/Mizune/mosaic/internal/git"
 	"github.com/Mizune/mosaic/internal/hook"
 	"github.com/Mizune/mosaic/internal/live"
@@ -54,6 +57,7 @@ type runtime struct {
 	reconciler *live.Reconciler
 	binder     *live.Binder
 	messaging  *service.MessagingService
+	discord    *discord.Bridge
 	liveCancel context.CancelFunc
 
 	logCloser io.Closer
@@ -194,7 +198,43 @@ func (r *runtime) startLive(ctx context.Context, home string) error {
 	// does not stall the loop.
 	r.messaging = service.NewMessagingService(r.store, r.tmux, r.bus, 0)
 	r.messaging.Start(cctx)
+
+	// Discord bridge — optional, gated on config.
+	if r.config.Discord.Enabled {
+		token, fromConfig := resolveDiscordToken(r.config.Discord)
+		if fromConfig {
+			slog.Warn("discord bot token loaded from config.toml; " +
+				"prefer MOSAIC_DISCORD_TOKEN env var to avoid accidental exposure")
+		}
+		if token != "" {
+			br := discord.NewBridge(r.sessions, r.messaging, r.tmux, r.store, r.bus, discord.Config{
+				Token:             token,
+				ChannelID:         r.config.Discord.ChannelID,
+				GuildID:           r.config.Discord.GuildID,
+				NotifyOnStop:      r.config.Discord.NotifyOnStop,
+				NotifyOnAttention: r.config.Discord.NotifyOnAttention,
+				AllowedUserIDs:    r.config.Discord.AllowedUserIDs,
+			})
+			if err := br.Start(cctx); err != nil {
+				slog.Warn("discord bridge failed to start", "err", err)
+			} else {
+				r.discord = br
+			}
+		}
+	}
+
 	return nil
+}
+
+// resolveDiscordToken returns the Discord bot token and whether it
+// came from the config file (as opposed to the env var). The env var
+// takes precedence so secrets stay out of TOML.
+func resolveDiscordToken(cfg config.DiscordSection) (token string, fromConfig bool) {
+	token = os.Getenv("MOSAIC_DISCORD_TOKEN")
+	if token != "" {
+		return token, false
+	}
+	return cfg.Token, cfg.Token != ""
 }
 
 // Close releases every resource the runtime owns. Commands should
@@ -205,6 +245,10 @@ func (r *runtime) Close() error {
 	}
 	// Shut down live components in reverse start order so the bus
 	// has nobody publishing to it by the time it itself closes.
+	if r.discord != nil {
+		r.discord.Stop()
+		r.discord = nil
+	}
 	if r.messaging != nil {
 		r.messaging.Stop()
 		r.messaging = nil

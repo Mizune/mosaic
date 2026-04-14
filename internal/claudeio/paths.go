@@ -22,10 +22,13 @@ import (
 )
 
 // Sanitize converts an absolute project path into the directory name
-// Claude Code uses inside ~/.claude/projects.
+// Claude Code uses inside ~/.claude/projects. Claude Code replaces
+// both path separators and dots with dashes, so ".worktrees" becomes
+// "-worktrees" (resulting in a double dash after the parent segment).
 func Sanitize(absPath string) string {
 	clean := filepath.Clean(absPath)
-	return strings.ReplaceAll(clean, string(filepath.Separator), "-")
+	s := strings.ReplaceAll(clean, string(filepath.Separator), "-")
+	return strings.ReplaceAll(s, ".", "-")
 }
 
 // ProjectsRoot returns ~/.claude/projects (or the override

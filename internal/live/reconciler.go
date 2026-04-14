@@ -11,7 +11,6 @@ package live
 import (
 	"context"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -334,53 +333,11 @@ func (r *Reconciler) handleHookNotification(ctx context.Context, ev hook.Notific
 	// Code's routine "Claude is waiting for your input" cue fires
 	// on every idle transition and would otherwise pin the ⚠
 	// indicator indefinitely.
-	if !isBlockingNotification(ev) {
+	if !hook.IsBlockingNotification(ev) {
 		return
 	}
 	_ = r.store.Sessions().SetAttention(ctx, parent.ID,
 		store.AttentionWaitingInput, ev.Title, ev.Body, "hook")
-}
-
-// isBlockingNotification returns true when a Claude Code
-// Notification payload looks like a real "user must act for the
-// agent to continue" cue, as opposed to the informational "I'm
-// idle, submit your next prompt" one. The classifier is
-// intentionally permissive: any ambiguous case is treated as
-// blocking so we err on the side of surfacing attention rather
-// than hiding it.
-func isBlockingNotification(ev hook.NotificationEvent) bool {
-	text := strings.ToLower(ev.Title + " " + ev.Body)
-	// Idle cues Claude Code emits after Stop — these should
-	// never be treated as attention.
-	idlePhrases := []string{
-		"waiting for your input",
-		"waiting for input",
-		"ready for next",
-		"awaiting your next",
-	}
-	for _, phrase := range idlePhrases {
-		if strings.Contains(text, phrase) {
-			return false
-		}
-	}
-	// Explicit "action required" cues.
-	blockingPhrases := []string{
-		"permission",
-		"approve",
-		"approval",
-		"confirm",
-		"do you want",
-		"proceed",
-		"consent",
-	}
-	for _, phrase := range blockingPhrases {
-		if strings.Contains(text, phrase) {
-			return true
-		}
-	}
-	// Unknown shape → lean toward visibility: surface it so the
-	// user can dismiss it manually if it turns out to be noise.
-	return true
 }
 
 // lookupParent finds the mosaic session that owns the given Claude

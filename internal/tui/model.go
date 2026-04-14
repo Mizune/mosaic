@@ -228,6 +228,10 @@ type Model struct {
 	settingsCursorIdx int
 	settingsUnsaved   bool
 	settingsError     string
+	// settingsTextEditing is true when the user is typing into a
+	// text-kind settings field (channel_id, guild_id, etc.).
+	settingsTextEditing bool
+	settingsTextBuf     string
 
 	// spinnerFrame counts the cosmetic spinner ticks. It is
 	// incremented by a 100ms tea.Tick that runs alongside the
