@@ -3,6 +3,7 @@ package discord
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/bwmarrin/discordgo"
 
@@ -97,26 +98,25 @@ func (br *Bridge) deregisterCommands() {
 	br.commandIDs = nil
 }
 
-// routeInteraction dispatches slash command interactions to the
-// appropriate handler.
+// routeInteraction dispatches slash command interactions and message
+// component interactions (buttons) to the appropriate handler.
 func (br *Bridge) routeInteraction(i *discordgo.InteractionCreate) {
-	if i.Type == discordgo.InteractionApplicationCommandAutocomplete {
+	switch i.Type {
+	case discordgo.InteractionApplicationCommandAutocomplete:
 		br.handleAutocomplete(i)
-		return
-	}
-	if i.Type != discordgo.InteractionApplicationCommand {
-		return
-	}
-
-	switch i.ApplicationCommandData().Name {
-	case "mosaic-list":
-		br.cmdList(i)
-	case "mosaic-status":
-		br.cmdStatus(i)
-	case "mosaic-kill":
-		br.cmdKill(i)
-	case "mosaic-send":
-		br.cmdSend(i)
+	case discordgo.InteractionApplicationCommand:
+		switch i.ApplicationCommandData().Name {
+		case "mosaic-list":
+			br.cmdList(i)
+		case "mosaic-status":
+			br.cmdStatus(i)
+		case "mosaic-kill":
+			br.cmdKill(i)
+		case "mosaic-send":
+			br.cmdSend(i)
+		}
+	case discordgo.InteractionMessageComponent:
+		br.handleComponent(i)
 	}
 }
 
@@ -244,6 +244,93 @@ func (br *Bridge) handleAutocomplete(i *discordgo.InteractionCreate) {
 			Choices: choices,
 		},
 	})
+}
+
+// handleComponent dispatches button clicks from permission
+// notification embeds. Custom IDs have the form "mosaic:<action>:<sessionID>".
+// Session IDs are ULIDs and never contain colons, so SplitN(_, ":", 3) is safe.
+func (br *Bridge) handleComponent(i *discordgo.InteractionCreate) {
+	customID := i.MessageComponentData().CustomID
+	parts := strings.SplitN(customID, ":", 3)
+	if len(parts) != 3 || parts[0] != customIDPrefix {
+		return
+	}
+
+	action := parts[1]
+	sessionID := parts[2]
+
+	// Deduplicate: if this message was already handled (e.g. a
+	// concurrent click), acknowledge Discord but do nothing else.
+	msgID := i.Message.ID
+	br.mu.Lock()
+	if _, already := br.handledInteractions[msgID]; already {
+		br.mu.Unlock()
+		br.respondEphemeral(i, "Already handled")
+		return
+	}
+	br.handledInteractions[msgID] = struct{}{}
+	br.mu.Unlock()
+
+	if !br.isAuthorized(i) {
+		br.respondEphemeral(i, "\u274C You are not authorized to respond to permission requests")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
+	defer cancel()
+
+	session, err := br.store.Sessions().GetByID(ctx, sessionID)
+	if err != nil {
+		br.respondEphemeral(i, "\u274C Session not found")
+		return
+	}
+
+	var keys []string
+	var label string
+	switch action {
+	case actionApprove:
+		// The TUI prompt defaults the cursor to "1. Yes",
+		// so a bare Enter confirms it.
+		keys = []string{enterKey}
+		label = "\u2705 Approved"
+	case actionDeny:
+		// Menu: 1. Yes, 2. Yes (always), 3. No — move down twice, then confirm.
+		keys = []string{"Down", "Down", enterKey}
+		label = "\u274C Denied"
+	default:
+		return
+	}
+
+	for _, k := range keys {
+		if err := br.tmux.SendKeys(ctx, session.TmuxSession, k, true); err != nil {
+			br.log.Warn("permission response", "session", session.Name, "action", action, "err", err)
+			br.respondEphemeral(i, "\u274C Failed to send response to session")
+			return
+		}
+	}
+
+	// Update the original message to show the decision and remove buttons.
+	var embeds []*discordgo.MessageEmbed
+	if i.Message != nil && len(i.Message.Embeds) > 0 {
+		embeds = i.Message.Embeds
+		if action == actionApprove {
+			embeds[0].Color = colorGreen
+		} else {
+			embeds[0].Color = colorRed
+		}
+		embeds[0].Footer = &discordgo.MessageEmbedFooter{
+			Text: label,
+		}
+	}
+	if err := br.dg.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
+		Data: &discordgo.InteractionResponseData{
+			Embeds:     embeds,
+			Components: []discordgo.MessageComponent{}, // remove buttons
+		},
+	}); err != nil {
+		br.log.Warn("update interaction", "err", err)
+	}
 }
 
 // respondEphemeral sends an ephemeral text response.

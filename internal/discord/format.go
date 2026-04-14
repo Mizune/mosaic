@@ -14,6 +14,24 @@ import (
 	"github.com/Mizune/mosaic/pkg/transcript"
 )
 
+// Embed colors used across the Discord package.
+const (
+	colorGreen  = 0x2ECC71
+	colorOrange = 0xF39C12
+	colorRed    = 0xE74C3C
+)
+
+// Button interaction constants.
+const (
+	customIDPrefix = "mosaic"
+	actionApprove  = "approve"
+	actionDeny     = "deny"
+)
+
+// enterKey is the empty string sentinel passed to tmux.SendKeys to
+// press Enter without preceding text input.
+const enterKey = ""
+
 // statusEmoji maps a session status string to a Discord-friendly emoji.
 func statusEmoji(status string) string {
 	switch store.SessionStatus(status) {
@@ -34,13 +52,13 @@ func statusEmoji(status string) string {
 func embedColor(status string) int {
 	switch store.SessionStatus(status) {
 	case store.StatusRunning:
-		return 0x2ECC71 // green
+		return colorGreen
 	case store.StatusIdle:
 		return 0x95A5A6 // grey
 	case store.StatusWaiting:
-		return 0xF39C12 // orange
+		return colorOrange
 	case store.StatusError:
-		return 0xE74C3C // red
+		return colorRed
 	default:
 		return 0x2C3E50 // dark
 	}

@@ -207,7 +207,7 @@ func (r *runtime) startLive(ctx context.Context, home string) error {
 				"prefer MOSAIC_DISCORD_TOKEN env var to avoid accidental exposure")
 		}
 		if token != "" {
-			br := discord.NewBridge(r.sessions, r.messaging, r.store, r.bus, discord.Config{
+			br := discord.NewBridge(r.sessions, r.messaging, r.tmux, r.store, r.bus, discord.Config{
 				Token:             token,
 				ChannelID:         r.config.Discord.ChannelID,
 				GuildID:           r.config.Discord.GuildID,

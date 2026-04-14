@@ -10,6 +10,7 @@ import (
 	"github.com/Mizune/mosaic/internal/bus"
 	"github.com/Mizune/mosaic/internal/service"
 	"github.com/Mizune/mosaic/internal/store"
+	"github.com/Mizune/mosaic/internal/tmux"
 )
 
 // Config holds the values the bridge needs at runtime. It is a
@@ -33,6 +34,7 @@ type Config struct {
 type Bridge struct {
 	sessions  *service.SessionService
 	messaging *service.MessagingService
+	tmux      tmux.Backend
 	store     *store.Store
 	bus       *bus.Bus
 	log       *slog.Logger
@@ -52,6 +54,11 @@ type Bridge struct {
 	claudeCache map[string]string // claudeSessionID → sessionID
 
 	debouncer *threadDebouncer
+
+	// handledInteractions tracks message IDs for which a permission
+	// button was already processed, preventing duplicate key sends
+	// from concurrent clicks.
+	handledInteractions map[string]struct{}
 }
 
 // NewBridge constructs a Bridge. The bridge does nothing until
@@ -59,6 +66,7 @@ type Bridge struct {
 func NewBridge(
 	sessions *service.SessionService,
 	messaging *service.MessagingService,
+	t tmux.Backend,
 	st *store.Store,
 	b *bus.Bus,
 	cfg Config,
@@ -66,14 +74,16 @@ func NewBridge(
 	return &Bridge{
 		sessions:    sessions,
 		messaging:   messaging,
+		tmux:        t,
 		store:       st,
 		bus:         b,
 		log:         slog.With("subsys", "discord.bridge"),
 		cfg:         cfg,
-		threads:     make(map[string]string),
-		reverse:     make(map[string]string),
-		claudeCache: make(map[string]string),
-		debouncer:   newDebouncer(),
+		threads:             make(map[string]string),
+		reverse:             make(map[string]string),
+		claudeCache:         make(map[string]string),
+		debouncer:           newDebouncer(),
+		handledInteractions: make(map[string]struct{}),
 	}
 }
 
@@ -198,16 +208,6 @@ func (br *Bridge) sendToThread(threadID, content string) {
 	}
 	if _, err := br.dg.ChannelMessageSend(threadID, content); err != nil {
 		br.log.Warn("send to thread", "thread", threadID, "err", err)
-	}
-}
-
-// sendEmbedToThread posts an embed to a Discord thread.
-func (br *Bridge) sendEmbedToThread(threadID string, embed *discordgo.MessageEmbed) {
-	if br.dg == nil || threadID == "" {
-		return
-	}
-	if _, err := br.dg.ChannelMessageSendEmbed(threadID, embed); err != nil {
-		br.log.Warn("send embed to thread", "thread", threadID, "err", err)
 	}
 }
 

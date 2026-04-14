@@ -100,7 +100,8 @@ func (br *Bridge) handleSessionStopped(ev bus.SessionStopped) {
 }
 
 // handleNotification forwards blocking notifications (permission
-// prompts, approval requests) to the session thread.
+// prompts, approval requests) to the session thread with interactive
+// Approve / Deny buttons.
 func (br *Bridge) handleNotification(ev hook.NotificationEvent) {
 	if !br.cfg.NotifyOnAttention {
 		return
@@ -123,13 +124,49 @@ func (br *Bridge) handleNotification(ev hook.NotificationEvent) {
 		return
 	}
 
+	description := ev.Body
+	if description == "" {
+		description = "The agent is waiting for your decision."
+	}
+
 	embed := &discordgo.MessageEmbed{
 		Title:       fmt.Sprintf("\U0001F7E0 %s", ev.Title),
-		Description: ev.Body,
-		Color:       0xF39C12, // orange
-		Footer: &discordgo.MessageEmbedFooter{
-			Text: "Reply in this thread to respond",
+		Description: description,
+		Color:       colorOrange,
+	}
+
+	approveID := customIDPrefix + ":" + actionApprove + ":" + session.ID
+	denyID := customIDPrefix + ":" + actionDeny + ":" + session.ID
+	components := []discordgo.MessageComponent{
+		discordgo.ActionsRow{
+			Components: []discordgo.MessageComponent{
+				discordgo.Button{
+					Label:    "Approve",
+					Style:    discordgo.SuccessButton,
+					CustomID: approveID,
+					Emoji: &discordgo.ComponentEmoji{
+						Name: "\u2705",
+					},
+				},
+				discordgo.Button{
+					Label:    "Deny",
+					Style:    discordgo.DangerButton,
+					CustomID: denyID,
+					Emoji: &discordgo.ComponentEmoji{
+						Name: "\u274C",
+					},
+				},
+			},
 		},
 	}
-	br.sendEmbedToThread(threadID, embed)
+
+	if br.dg == nil || threadID == "" {
+		return
+	}
+	if _, err := br.dg.ChannelMessageSendComplex(threadID, &discordgo.MessageSend{
+		Embeds:     []*discordgo.MessageEmbed{embed},
+		Components: components,
+	}); err != nil {
+		br.log.Warn("send notification", "thread", threadID, "err", err)
+	}
 }

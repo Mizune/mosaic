@@ -72,7 +72,7 @@ func TestIsAuthorized_NilMemberAndUser(t *testing.T) {
 }
 
 func TestThreadMapping(t *testing.T) {
-	br := NewBridge(nil, nil, nil, nil, Config{})
+	br := NewBridge(nil, nil, nil, nil, nil, Config{})
 
 	br.setThread("session-1", "thread-A")
 
@@ -95,7 +95,7 @@ func TestThreadMapping(t *testing.T) {
 }
 
 func TestClaudeCache(t *testing.T) {
-	br := NewBridge(nil, nil, nil, nil, Config{})
+	br := NewBridge(nil, nil, nil, nil, nil, Config{})
 
 	// Populate cache manually.
 	br.mu.Lock()
