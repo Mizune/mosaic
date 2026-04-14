@@ -53,6 +53,19 @@ changelog:
       - "^chore:"
       - "^ci:"
 
+brews:
+  - repository:
+      owner: Mizune
+      name: homebrew-tap
+    directory: Formula
+    homepage: "https://github.com/Mizune/mosaic"
+    description: "TUI command center for running 10+ AI coding agents in parallel"
+    license: "MIT"
+    post_install: |
+      system "xattr", "-cr", bin/"mosaic"
+    test: |
+      system "#{bin}/mosaic", "--version"
+
 release:
   github:
     owner: Mizune
