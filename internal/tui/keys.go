@@ -30,6 +30,7 @@ type keyMap struct {
 	ClearSelect   []string
 	SelectAll     []string
 	Fork          []string
+	Respawn       []string
 
 	// Filter tabs (! @ # $).
 	FilterWaiting []string
@@ -73,6 +74,7 @@ func defaultKeys() keyMap {
 		ClearSelect:  []string{"ctrl+\\"},
 		SelectAll:    []string{"*"},
 		Fork:         []string{"f"},
+		Respawn:      []string{"r"},
 
 		FilterWaiting: []string{"!"},
 		FilterRunning: []string{"@"},
@@ -161,6 +163,8 @@ func (k *keyMap) applyOverrides(overrides map[string]string) {
 			k.SelectAll = chords
 		case "fork":
 			k.Fork = chords
+		case "respawn":
+			k.Respawn = chords
 		case "filter_waiting":
 			k.FilterWaiting = chords
 		case "filter_running":

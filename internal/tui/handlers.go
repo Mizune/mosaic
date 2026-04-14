@@ -144,6 +144,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case matches(msg, m.keys.Fork):
 		return m.forkSelected()
+	case matches(msg, m.keys.Respawn):
+		return m.respawnSelected()
 
 	case matches(msg, m.keys.FilterWaiting):
 		m.setStatusFilter(statusFilterWaiting)
@@ -489,6 +491,67 @@ type forkResultMsg struct {
 	success bool
 	source  string
 	err     string
+}
+
+// respawnSelected respawns the stopped session(s) under the cursor
+// or all Space-marked stopped sessions. Sessions that are already
+// alive are silently skipped.
+func (m *Model) respawnSelected() (tea.Model, tea.Cmd) {
+	if len(m.rows) == 0 {
+		return m, nil
+	}
+
+	// Collect target names: marked sessions take precedence over cursor.
+	// Only stopped sessions are included — running ones are skipped.
+	var names []string
+	if len(m.selected) > 0 {
+		for _, row := range m.rows {
+			if row.IsGroup || row.IsSubagent {
+				continue
+			}
+			if m.selected[row.Session.ID] && row.Session.Status == string(store.StatusStopped) {
+				names = append(names, row.Session.Name)
+			}
+		}
+		if len(names) == 0 {
+			m.setTopToast("no stopped sessions in selection")
+			return m, nil
+		}
+	} else {
+		row := m.rows[m.cursor]
+		if row.IsGroup || row.IsSubagent {
+			return m, nil
+		}
+		if row.Session.Status != string(store.StatusStopped) {
+			m.setTopToast("session already running")
+			return m, nil
+		}
+		names = []string{row.Session.Name}
+	}
+
+	return m, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		var total, success int
+		var failed []string
+		for _, n := range names {
+			total++
+			if err := m.sessions.Respawn(ctx, n); err != nil {
+				failed = append(failed, fmt.Sprintf("%s: %v", n, err))
+			} else {
+				success++
+			}
+		}
+		return respawnResultMsg{total: total, success: success, failed: failed}
+	}
+}
+
+// respawnResultMsg carries the outcome of a respawn action back to
+// the Update loop.
+type respawnResultMsg struct {
+	total   int
+	success int
+	failed  []string
 }
 
 // toggleMark flips the selection state for the session under the
