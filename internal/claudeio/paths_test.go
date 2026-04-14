@@ -16,6 +16,11 @@ var _ = Describe("Sanitize", func() {
 		Expect(claudeio.Sanitize("/home/dev/Projects/mosaic")).
 			To(Equal("-home-dev-Projects-mosaic"))
 	})
+
+	It("replaces dots with dashes to match Claude Code", func() {
+		Expect(claudeio.Sanitize("/Users/m1zyuk1/Projects/mosaic/.worktrees/discord-connectivity")).
+			To(Equal("-Users-m1zyuk1-Projects-mosaic--worktrees-discord-connectivity"))
+	})
 })
 
 var _ = Describe("FindLatestSession / ListSubagents", func() {
