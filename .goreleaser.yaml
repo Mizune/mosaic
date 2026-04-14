@@ -57,6 +57,7 @@ brews:
   - repository:
       owner: Mizune
       name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
     directory: Formula
     homepage: "https://github.com/Mizune/mosaic"
     description: "TUI command center for running 10+ AI coding agents in parallel"
