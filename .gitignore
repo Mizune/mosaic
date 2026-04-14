@@ -5,3 +5,4 @@
 *.test
 .DS_Store
 .mosaic/
+.diffelens.local.yaml
