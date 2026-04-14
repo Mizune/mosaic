@@ -124,6 +124,15 @@ func (m *Model) renderHeader() string {
 	row1Parts := []string{
 		bold(m.theme.Accent, "◆ mosaic"),
 		lipgloss.NewStyle().Foreground(m.theme.Highlight).Render(version),
+	}
+	if m.availableUpdate != "" {
+		row1Parts = append(row1Parts,
+			lipgloss.NewStyle().
+				Foreground(m.theme.Running).
+				Bold(true).
+				Render("↑ v"+m.availableUpdate+" available"))
+	}
+	row1Parts = append(row1Parts,
 		sep,
 		m.theme.MutedText.Render("profile"),
 		bold(m.theme.Text, profile),
@@ -133,7 +142,7 @@ func (m *Model) renderHeader() string {
 		sep,
 		m.theme.MutedText.Render("sessions"),
 		bold(m.theme.Accent, fmt.Sprintf("%d", sessionCount)),
-	}
+	)
 	if subagentCount > 0 {
 		row1Parts = append(row1Parts, sep,
 			m.theme.MutedText.Render("sub-agents"),
