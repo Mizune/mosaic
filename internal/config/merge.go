@@ -90,6 +90,9 @@ func mergeMosaic(base, ov MosaicSection) MosaicSection {
 	if ov.DefaultTool != "" {
 		out.DefaultTool = ov.DefaultTool
 	}
+	if ov.DisableUpdateCheck {
+		out.DisableUpdateCheck = true
+	}
 	return out
 }
 

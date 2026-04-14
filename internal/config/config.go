@@ -74,6 +74,11 @@ type MosaicSection struct {
 	LogLevel    string `toml:"log_level"`
 	DefaultTool string `toml:"default_tool"`
 
+	// DisableUpdateCheck suppresses the background version check
+	// that runs when the TUI starts. Set to true in config.toml
+	// to opt out of update notifications entirely.
+	DisableUpdateCheck bool `toml:"disable_update_check"`
+
 	// Tools holds per-tool launch flag overrides. The map key
 	// is the tool name (claude / codex / gemini / shell) and
 	// the value is a flag set that mosaic appends after the
