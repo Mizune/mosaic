@@ -21,6 +21,12 @@ type Config struct {
 	Worktree WorktreeSection `toml:"worktree"`
 	Hooks    HooksSection    `toml:"hooks"`
 
+	// Discord holds the [discord] table that controls the optional
+	// Discord bridge. When Enabled is true and a bot token is
+	// available, mosaic opens a WebSocket to Discord and streams
+	// session events into per-session threads.
+	Discord DiscordSection `toml:"discord"`
+
 	// Projects is a user-maintained registry of named project
 	// directories. The TUI wizard and the new-session CLI both
 	// consult this list so users do not have to type (or even
@@ -189,6 +195,42 @@ type HooksSection struct {
 
 	// Events lists the Claude Code hook events to install handlers for.
 	Events []string `toml:"events"`
+}
+
+// DiscordSection holds the [discord] table. The bridge is disabled by
+// default; users opt in by setting enabled = true and providing a bot
+// token (preferably via the MOSAIC_DISCORD_TOKEN env var).
+type DiscordSection struct {
+	// Enabled gates the entire Discord bridge.
+	Enabled bool `toml:"enabled"`
+
+	// Token is the Discord bot token. Users should prefer the
+	// MOSAIC_DISCORD_TOKEN env var over storing the token in
+	// plaintext TOML.
+	Token string `toml:"token"`
+
+	// ChannelID is the parent Discord channel where the bridge
+	// creates per-session threads and posts notifications.
+	ChannelID string `toml:"channel_id"`
+
+	// GuildID is the Discord guild (server) to register slash
+	// commands in. When empty, commands register globally (slower
+	// propagation, ~1 hour vs instant).
+	GuildID string `toml:"guild_id"`
+
+	// NotifyOnStop sends a message to the session thread when a
+	// session stops.
+	NotifyOnStop bool `toml:"notify_on_stop"`
+
+	// NotifyOnAttention sends a message to the session thread when
+	// a blocking notification (permission prompt, approval request)
+	// is detected.
+	NotifyOnAttention bool `toml:"notify_on_attention"`
+
+	// AllowedUserIDs restricts destructive slash commands (kill,
+	// send) to the listed Discord user IDs. When empty, all guild
+	// members are allowed.
+	AllowedUserIDs []string `toml:"allowed_user_ids"`
 }
 
 // Default returns the built-in defaults applied before any user config

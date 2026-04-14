@@ -27,6 +27,7 @@ func Merge(base, override Config) Config {
 	out.Tmux = mergeTmux(base.Tmux, override.Tmux)
 	out.Worktree = mergeWorktree(base.Worktree, override.Worktree)
 	out.Hooks = mergeHooks(base.Hooks, override.Hooks)
+	out.Discord = mergeDiscord(base.Discord, override.Discord)
 	out.Projects = mergeProjects(base.Projects, override.Projects)
 	return out
 }
@@ -223,6 +224,32 @@ func mergeStringMap(base, ov map[string]string) map[string]string {
 	}
 	for k, v := range ov {
 		out[k] = v
+	}
+	return out
+}
+
+func mergeDiscord(base, ov DiscordSection) DiscordSection {
+	out := base
+	if ov.Enabled {
+		out.Enabled = true
+	}
+	if ov.Token != "" {
+		out.Token = ov.Token
+	}
+	if ov.ChannelID != "" {
+		out.ChannelID = ov.ChannelID
+	}
+	if ov.GuildID != "" {
+		out.GuildID = ov.GuildID
+	}
+	if ov.NotifyOnStop {
+		out.NotifyOnStop = true
+	}
+	if ov.NotifyOnAttention {
+		out.NotifyOnAttention = true
+	}
+	if len(ov.AllowedUserIDs) > 0 {
+		out.AllowedUserIDs = append([]string(nil), ov.AllowedUserIDs...)
 	}
 	return out
 }
