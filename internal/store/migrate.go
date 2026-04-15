@@ -46,6 +46,11 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return fmt.Errorf("apply migration %04d_%s: %w", m.version, m.name, err)
 		}
 	}
+	// Post-migration hooks for operations that cannot be expressed
+	// safely in pure SQL (e.g. conditional DDL).
+	if err := s.dropColumnIfExists(ctx, "sessions", "legacy_id"); err != nil {
+		return fmt.Errorf("post-migrate drop legacy_id: %w", err)
+	}
 	return nil
 }
 
@@ -127,6 +132,22 @@ func loadMigrations() ([]migration, error) {
 	}
 	sort.Slice(ms, func(i, j int) bool { return ms[i].version < ms[j].version })
 	return ms, nil
+}
+
+// dropColumnIfExists drops a column only when it actually exists in
+// the table. SQLite lacks ALTER TABLE DROP COLUMN IF EXISTS, so we
+// query pragma_table_info first.
+func (s *Store) dropColumnIfExists(ctx context.Context, table, column string) error {
+	var count int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`,
+		table, column).Scan(&count)
+	if err != nil || count == 0 {
+		return nil
+	}
+	_, err = s.db.ExecContext(ctx,
+		fmt.Sprintf(`ALTER TABLE %s DROP COLUMN %s`, table, column))
+	return err
 }
 
 // parseMigration extracts the version and human name from a file name
