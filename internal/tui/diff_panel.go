@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -926,13 +928,55 @@ func colourDiffLine(m *Model, line, path string, width int) string {
 		return m.theme.SectionTitle.Render(plain)
 	case strings.HasPrefix(plain, "+"):
 		code := plain[1:]
-		return m.theme.RunningTag.Render("+") + highlightDiffContent(code, path, m.theme.Name)
+		content := m.theme.RunningTag.Render("+") + highlightDiffContent(code, path, m.theme.Name)
+		pad := width - visibleLen(plain)
+		return applyDiffBg(content, m.theme.DiffAddBg, pad)
 	case strings.HasPrefix(plain, "-"):
 		code := plain[1:]
-		return m.theme.AttentionTag.Render("-") + highlightDiffContent(code, path, m.theme.Name)
+		content := m.theme.AttentionTag.Render("-") + highlightDiffContent(code, path, m.theme.Name)
+		pad := width - visibleLen(plain)
+		return applyDiffBg(content, m.theme.DiffRemoveBg, pad)
 	default:
 		return plain
 	}
+}
+
+// sgrResetRe matches common SGR reset variants: \033[0m, \033[m, \033[00m.
+var sgrResetRe = regexp.MustCompile(`\x1b\[0*m`)
+
+const bgTrueColorFmt = "\033[48;2;%d;%d;%dm"
+
+// applyDiffBg injects a true-color ANSI background into content,
+// re-applying it after every SGR reset so Chroma's syntax
+// highlighting never clears the background mid-line. pad is the
+// number of trailing spaces to append so the background extends to
+// the full available width.
+func applyDiffBg(content string, bg lipgloss.Color, pad int) string {
+	hex := string(bg)
+	if len(hex) != 7 || hex[0] != '#' {
+		return content
+	}
+	r, err := strconv.ParseUint(hex[1:3], 16, 8)
+	if err != nil {
+		return content
+	}
+	g, err := strconv.ParseUint(hex[3:5], 16, 8)
+	if err != nil {
+		return content
+	}
+	b, err := strconv.ParseUint(hex[5:7], 16, 8)
+	if err != nil {
+		return content
+	}
+	bgSeq := fmt.Sprintf(bgTrueColorFmt, r, g, b)
+	const reset = "\033[0m"
+
+	result := bgSeq + sgrResetRe.ReplaceAllString(content, "${0}"+bgSeq)
+	if pad > 0 {
+		result += strings.Repeat(" ", pad)
+	}
+	result += reset
+	return result
 }
 
 // diffStatusGlyph returns the single-character badge for a file's

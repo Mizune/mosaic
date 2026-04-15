@@ -29,20 +29,26 @@ type Theme struct {
 	Selected  lipgloss.Color
 	Accent    lipgloss.Color
 
+	// Diff background colors — subtle tint for added/removed lines.
+	DiffAddBg    lipgloss.Color
+	DiffRemoveBg lipgloss.Color
+
 	// Pre-built styles.
-	Header       lipgloss.Style
-	StatusBar    lipgloss.Style
-	BorderBox    lipgloss.Style
-	SelectedRow  lipgloss.Style
-	AttentionRow lipgloss.Style // dim red background for waiting sessions
-	NormalRow    lipgloss.Style
-	MutedText    lipgloss.Style
-	AttentionTag lipgloss.Style
-	RunningTag   lipgloss.Style
-	IdleTag      lipgloss.Style
-	ErrorTag     lipgloss.Style
-	StoppedTag   lipgloss.Style
-	SectionTitle lipgloss.Style
+	Header         lipgloss.Style
+	StatusBar      lipgloss.Style
+	BorderBox      lipgloss.Style
+	SelectedRow    lipgloss.Style
+	AttentionRow   lipgloss.Style // dim red background for waiting sessions
+	NormalRow      lipgloss.Style
+	MutedText      lipgloss.Style
+	AttentionTag   lipgloss.Style
+	RunningTag     lipgloss.Style
+	IdleTag        lipgloss.Style
+	ErrorTag       lipgloss.Style
+	StoppedTag     lipgloss.Style
+	SectionTitle   lipgloss.Style
+	DiffAddLine    lipgloss.Style // faint green background for + lines
+	DiffRemoveLine lipgloss.Style // faint red background for - lines
 }
 
 // CatppuccinMocha returns mosaic's default dark theme (Catppuccin
@@ -63,6 +69,9 @@ func CatppuccinMocha() *Theme {
 		Border:    lipgloss.Color("#45475a"), // surface-1
 		Selected:  lipgloss.Color("#313244"), // surface-0
 		Accent:    lipgloss.Color("#89b4fa"), // blue
+
+		DiffAddBg:    lipgloss.Color("#243328"), // green at ~10% over base
+		DiffRemoveBg: lipgloss.Color("#3d1f2a"), // red at ~10% over base
 	}
 	return t.build()
 }
@@ -84,6 +93,9 @@ func CatppuccinLatte() *Theme {
 		Border:    lipgloss.Color("#bcc0cc"),
 		Selected:  lipgloss.Color("#dce0e8"),
 		Accent:    lipgloss.Color("#1e66f5"),
+
+		DiffAddBg:    lipgloss.Color("#dceedd"), // green at ~10% over base
+		DiffRemoveBg: lipgloss.Color("#f5dde1"), // red at ~10% over base
 	}
 	return t.build()
 }
@@ -105,6 +117,9 @@ func TokyoNight() *Theme {
 		Border:    lipgloss.Color("#3b4261"),
 		Selected:  lipgloss.Color("#283457"),
 		Accent:    lipgloss.Color("#7dcfff"),
+
+		DiffAddBg:    lipgloss.Color("#252e22"), // green at ~10% over base
+		DiffRemoveBg: lipgloss.Color("#301f28"), // red at ~10% over base
 	}
 	return t.build()
 }
@@ -126,6 +141,9 @@ func TokyoNightStorm() *Theme {
 		Border:    lipgloss.Color("#3b4261"),
 		Selected:  lipgloss.Color("#292e42"),
 		Accent:    lipgloss.Color("#7aa2f7"),
+
+		DiffAddBg:    lipgloss.Color("#2d3530"), // green at ~10% over base
+		DiffRemoveBg: lipgloss.Color("#382635"), // red at ~10% over base
 	}
 	return t.build()
 }
@@ -265,6 +283,18 @@ func (t *Theme) build() *Theme {
 	t.SectionTitle = lipgloss.NewStyle().
 		Foreground(t.Accent).
 		Bold(true)
+
+	if t.DiffAddBg != "" {
+		t.DiffAddLine = lipgloss.NewStyle().Background(t.DiffAddBg)
+	} else {
+		t.DiffAddLine = lipgloss.NewStyle()
+	}
+	if t.DiffRemoveBg != "" {
+		t.DiffRemoveLine = lipgloss.NewStyle().Background(t.DiffRemoveBg)
+	} else {
+		t.DiffRemoveLine = lipgloss.NewStyle()
+	}
+
 	return t
 }
 
