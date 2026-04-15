@@ -289,6 +289,9 @@ func (r *runtime) Close() error {
 		r.bus.Close()
 	}
 	if r.store != nil {
+		// Checkpoint the WAL before closing so the -wal file does
+		// not grow unboundedly across sessions.
+		_ = r.store.WALCheckpoint()
 		_ = r.store.Close()
 	}
 	if r.logCloser != nil {
