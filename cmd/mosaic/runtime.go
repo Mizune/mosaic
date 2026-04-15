@@ -16,6 +16,7 @@ import (
 	"github.com/Mizune/mosaic/internal/live"
 	"github.com/Mizune/mosaic/internal/logging"
 	"github.com/Mizune/mosaic/internal/mosaicpath"
+	"github.com/Mizune/mosaic/internal/pidguard"
 	"github.com/Mizune/mosaic/internal/service"
 	"github.com/Mizune/mosaic/internal/store"
 	"github.com/Mizune/mosaic/internal/tmux"
@@ -52,6 +53,7 @@ type runtime struct {
 	sessions *service.SessionService
 
 	// Live layer (TUI mode only).
+	pidRelease func() // removes PID file on close
 	watcher    *claudeio.Watcher
 	hookServer *hook.Server
 	reconciler *live.Reconciler
@@ -162,6 +164,12 @@ func openRuntime(ctx context.Context, opts runtimeOptions) (*runtime, error) {
 // startLive boots the watcher, hook socket and reconciler/binder so
 // the TUI shows real-time sub-agent state.
 func (r *runtime) startLive(ctx context.Context, home string) error {
+	release, err := pidguard.Acquire(r.paths.PIDFile)
+	if err != nil {
+		return fmt.Errorf("acquire pid: %w", err)
+	}
+	r.pidRelease = release
+
 	cctx, cancel := context.WithCancel(ctx)
 	r.liveCancel = cancel
 
@@ -272,6 +280,10 @@ func (r *runtime) Close() error {
 	if r.liveCancel != nil {
 		r.liveCancel()
 		r.liveCancel = nil
+	}
+	if r.pidRelease != nil {
+		r.pidRelease()
+		r.pidRelease = nil
 	}
 	if r.bus != nil {
 		r.bus.Close()

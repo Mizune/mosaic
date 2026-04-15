@@ -48,6 +48,9 @@ type Paths struct {
 	// RunDir holds runtime files (sockets, pid files).
 	RunDir string
 
+	// PIDFile is the path to the TUI instance lock file.
+	PIDFile string
+
 	// SocketsDir holds long-lived sockets (hook server, IPC).
 	SocketsDir string
 
@@ -84,6 +87,7 @@ func Resolve(home string) (Paths, error) {
 		LogsDir:          filepath.Join(dataDir, "logs"),
 		LogFile:          filepath.Join(dataDir, "logs", "mosaic.log"),
 		RunDir:           filepath.Join(dataDir, "run"),
+		PIDFile:          filepath.Join(dataDir, "run", "mosaic.pid"),
 		SocketsDir:       filepath.Join(dataDir, "run", "sockets"),
 		FirstRunMarker:   filepath.Join(dataDir, ".first-run-done"),
 		TmuxSocketName:   "mosaic",
