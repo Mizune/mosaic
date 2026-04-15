@@ -146,6 +146,40 @@ func (s *Server) prepareSocketDir() error {
 	return nil
 }
 
+// CleanStaleSockets scans the shared socket directory and removes
+// sockets whose owning process is no longer alive. It returns the
+// number of sockets removed. When dryRun is true, no files are
+// removed but the count still reflects what would be cleaned.
+func CleanStaleSockets(dryRun bool) (int, error) {
+	dir := SocketDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	removed := 0
+	for _, de := range entries {
+		name := de.Name()
+		if !strings.HasPrefix(name, "pid-") {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimPrefix(name, "pid-"))
+		if err != nil {
+			continue
+		}
+		if isProcessAlive(pid) {
+			continue
+		}
+		if !dryRun {
+			_ = os.Remove(filepath.Join(dir, name))
+		}
+		removed++
+	}
+	return removed, nil
+}
+
 func isProcessAlive(pid int) bool {
 	if pid <= 0 {
 		return false

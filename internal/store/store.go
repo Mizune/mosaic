@@ -109,6 +109,14 @@ func (s *Store) SessionSkills() *SessionSkillsRepo {
 	return s.sessionSkills
 }
 
+// WALCheckpoint forces a WAL checkpoint so the -wal file is truncated
+// and its space reclaimed. This is useful for the `mosaic clean`
+// command.
+func (s *Store) WALCheckpoint() error {
+	_, err := s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	return err
+}
+
 // buildDSN constructs the modernc.org/sqlite connection string for the
 // given on-disk path. ":memory:" is recognised and forwarded as-is so
 // tests can use an in-memory database.

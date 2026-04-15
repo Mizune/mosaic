@@ -116,6 +116,7 @@ detection, declarative worktree setup, and a built-in conductor.`,
 	addRuntimeFlags(root, &opts)
 	root.Flags().StringVar(&pprofAddr, "pprof", "",
 		"Start a net/http/pprof server on the given address (e.g. :6060)")
+	root.AddCommand(newCleanCmd())
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newCreateCmd())
 	root.AddCommand(newListCmd())
