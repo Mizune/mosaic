@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -74,6 +75,17 @@ type NewSession struct {
 	Tool         SessionTool
 }
 
+// sessionColumns is the explicit column list for SELECT queries on the
+// sessions table. Using this instead of SELECT * prevents sqlx from
+// emitting "missing destination name" warnings when the database still
+// has columns (e.g. legacy_id) that are absent from the Session struct.
+var sessionColumns = strings.Join([]string{
+	"id", "name", "project_path", "worktree_path", "branch",
+	"tmux_session", "tool", "status", "claude_session_id", "conductor_id",
+	"created_at", "last_active_at", "attention_state", "attention_title",
+	"attention_body", "attention_since", "attention_source",
+}, ", ")
+
 // SessionsRepo is the typed accessor for the sessions table.
 type SessionsRepo struct {
 	db *sqlx.DB
@@ -141,7 +153,7 @@ func (r *SessionsRepo) Insert(ctx context.Context, in NewSession) (Session, erro
 // GetByID returns a session by its ULID, or [ErrSessionNotFound].
 func (r *SessionsRepo) GetByID(ctx context.Context, id string) (Session, error) {
 	var s Session
-	err := r.db.GetContext(ctx, &s, `SELECT * FROM sessions WHERE id = ?`, id)
+	err := r.db.GetContext(ctx, &s, `SELECT `+sessionColumns+` FROM sessions WHERE id = ?`, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, ErrSessionNotFound
 	}
@@ -155,7 +167,7 @@ func (r *SessionsRepo) GetByID(ctx context.Context, id string) (Session, error) 
 // [ErrSessionNotFound].
 func (r *SessionsRepo) GetByName(ctx context.Context, name string) (Session, error) {
 	var s Session
-	err := r.db.GetContext(ctx, &s, `SELECT * FROM sessions WHERE name = ?`, name)
+	err := r.db.GetContext(ctx, &s, `SELECT `+sessionColumns+` FROM sessions WHERE name = ?`, name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, ErrSessionNotFound
 	}
@@ -169,7 +181,7 @@ func (r *SessionsRepo) GetByName(ctx context.Context, name string) (Session, err
 func (r *SessionsRepo) List(ctx context.Context) ([]Session, error) {
 	var out []Session
 	err := r.db.SelectContext(ctx, &out, `
-        SELECT * FROM sessions ORDER BY last_active_at DESC, id DESC`)
+        SELECT `+sessionColumns+` FROM sessions ORDER BY last_active_at DESC, id DESC`)
 	if err != nil {
 		return nil, err
 	}
