@@ -68,6 +68,76 @@ func TestDecoder_StreamingMultipleLines(t *testing.T) {
 	}
 }
 
+func TestDecoder_MalformedJSON_SkipsLine(t *testing.T) {
+	body := strings.Join([]string{
+		`{"type":"assistant","uuid":"a","sessionId":"sid"}`,
+		`{this is not valid json}`,
+		`{"type":"user","uuid":"b","sessionId":"sid"}`,
+	}, "\n") + "\n"
+
+	d := transcript.NewDecoder(strings.NewReader(body))
+
+	e1, err := d.Next()
+	if err != nil {
+		t.Fatalf("entry 1: %v", err)
+	}
+	if e1.Type != transcript.EntryAssistant {
+		t.Fatalf("entry 1 type = %v, want assistant", e1.Type)
+	}
+
+	// The malformed line should be silently skipped.
+	e2, err := d.Next()
+	if err != nil {
+		t.Fatalf("entry 2: %v", err)
+	}
+	if e2.Type != transcript.EntryUser {
+		t.Fatalf("entry 2 type = %v, want user", e2.Type)
+	}
+}
+
+func TestDecoder_OversizedLine_DoesNotSpin(t *testing.T) {
+	// Build a line that exceeds the 16 MiB scanner buffer.
+	oversized := `{"type":"assistant","data":"` + strings.Repeat("x", 17*1024*1024) + `"}`
+	body := strings.Join([]string{
+		`{"type":"user","uuid":"a","sessionId":"sid"}`,
+		oversized,
+	}, "\n") + "\n"
+
+	d := transcript.NewDecoder(strings.NewReader(body))
+
+	// First valid entry should be returned.
+	e, err := d.Next()
+	if err != nil {
+		t.Fatalf("first entry: %v", err)
+	}
+	if e.Type != transcript.EntryUser {
+		t.Fatalf("type = %v, want user", e.Type)
+	}
+
+	// Next call must not hang — it should return a non-EOF error
+	// (bufio.ErrTooLong) because the oversized line exceeds the buffer.
+	_, err = d.Next()
+	if err == nil {
+		t.Fatal("expected error for oversized line, got nil")
+	}
+}
+
+func TestDecoder_LargeLine_8MB(t *testing.T) {
+	// An 8 MiB line is within the 16 MiB buffer and should parse fine.
+	payload := strings.Repeat("y", 8*1024*1024)
+	line := `{"type":"assistant","uuid":"a","sessionId":"sid","data":"` + payload + `"}`
+	body := line + "\n"
+
+	d := transcript.NewDecoder(strings.NewReader(body))
+	e, err := d.Next()
+	if err != nil {
+		t.Fatalf("parse 8MB line: %v", err)
+	}
+	if e.Type != transcript.EntryAssistant {
+		t.Fatalf("type = %v, want assistant", e.Type)
+	}
+}
+
 func TestParseSubAgentInput(t *testing.T) {
 	const raw = `{"description":"refactor","subagent_type":"general-purpose","prompt":"do thing","run_in_background":true}`
 	in, err := transcript.ParseSubAgentInput([]byte(raw))

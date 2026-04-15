@@ -3,7 +3,6 @@ package transcript
 import (
 	"bufio"
 	"encoding/json"
-	"errors"
 	"io"
 )
 
@@ -28,18 +27,24 @@ type Decoder struct {
 	scanner *bufio.Scanner
 }
 
+// maxScannerBuffer is the upper limit for the bufio.Scanner token
+// size. Claude Code transcripts can contain very long assistant
+// responses (observed 4.4 MiB+), so we allow up to 16 MiB.
+const maxScannerBuffer = 16 * 1024 * 1024
+
 // NewDecoder constructs a Decoder around r. The scanner buffer is
-// raised to 4 MiB so it can handle pathologically long assistant
+// raised to 16 MiB so it can handle pathologically long assistant
 // responses without truncation.
 func NewDecoder(r io.Reader) *Decoder {
 	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	sc.Buffer(make([]byte, 0, 64*1024), maxScannerBuffer)
 	return &Decoder{scanner: sc}
 }
 
 // Next reads the next entry. It returns io.EOF when the stream is
-// exhausted, or any underlying error from the bufio.Scanner /
-// json.Unmarshal.
+// exhausted, or a permanent scanner error (e.g. bufio.ErrTooLong)
+// when the scanner can no longer advance. Malformed JSON lines are
+// silently skipped so that one bad entry never propagates to callers.
 func (d *Decoder) Next() (Entry, error) {
 	for d.scanner.Scan() {
 		line := d.scanner.Bytes()
@@ -47,10 +52,11 @@ func (d *Decoder) Next() (Entry, error) {
 			continue
 		}
 		entry, err := ParseLine(line)
-		if errors.Is(err, io.EOF) {
+		if err != nil {
+			// Malformed JSON — skip this line and try the next.
 			continue
 		}
-		return entry, err
+		return entry, nil
 	}
 	if err := d.scanner.Err(); err != nil {
 		return Entry{}, err

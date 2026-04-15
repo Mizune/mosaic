@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"sync"
 
@@ -77,11 +78,16 @@ func (t *Tail) Read() ([]transcript.Entry, error) {
 			break
 		}
 		if err != nil {
-			// Skip a malformed line and keep going. The watcher will
-			// eventually surface persistent errors via metrics; for
-			// now we tolerate them so one bad entry can't stall the
-			// whole tail.
-			continue
+			// Permanent scanner error (e.g. bufio.ErrTooLong for
+			// lines exceeding the 16 MiB buffer). The scanner will
+			// never yield another line, so we must break to avoid an
+			// infinite spin loop. The offset advances to the current
+			// file size, so the next Read() picks up new content.
+			// Lines between the error and the end of this batch are
+			// lost; log so monitoring can detect data loss.
+			slog.Warn("tail: scanner error, skipping to end of file",
+				"path", t.path, "offset", t.offset, "err", err)
+			break
 		}
 		entries = append(entries, e)
 	}
