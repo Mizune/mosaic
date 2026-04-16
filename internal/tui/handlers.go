@@ -237,11 +237,37 @@ func (m *Model) moveCursor(delta int) {
 		return
 	}
 	m.cursor += delta
+	// Skip sub-agent rows — they are display-only and selecting
+	// them blocks session navigation without showing useful info.
+	for m.cursor >= 0 && m.cursor < len(m.rows) && m.rows[m.cursor].IsSubagent {
+		m.cursor += delta
+	}
 	if m.cursor < 0 {
 		m.cursor = 0
 	}
 	if m.cursor >= len(m.rows) {
 		m.cursor = len(m.rows) - 1
+	}
+	// After clamping, the cursor can still land on a sub-agent
+	// row (first/last row is a sub-agent, or overshoot hit the
+	// edge). Walk backwards from the clamped position to find
+	// the nearest non-sub-agent row. If none exist, stay put.
+	if m.rows[m.cursor].IsSubagent {
+		for i := m.cursor; i >= 0; i-- {
+			if !m.rows[i].IsSubagent {
+				m.cursor = i
+				break
+			}
+		}
+	}
+	if m.rows[m.cursor].IsSubagent {
+		// No non-sub-agent row at or before cursor — try forward.
+		for i := m.cursor; i < len(m.rows); i++ {
+			if !m.rows[i].IsSubagent {
+				m.cursor = i
+				break
+			}
+		}
 	}
 	// Extend the visual range whenever cursor moves while
 	// visual mode is on. The set is recomputed from the
