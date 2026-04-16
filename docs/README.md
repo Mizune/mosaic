@@ -11,6 +11,7 @@
 | [hooks.md](hooks.md) | Claude Code hook integration |
 | [worktrees.md](worktrees.md) | Declarative worktree setup recipes |
 | [architecture.md](architecture.md) | Packages, data flow, performance budget |
+| [windows-wsl2-setup.md](windows-wsl2-setup.md) | Running mosaic on Windows via WSL2 |
 
 Demo GIFs and their `.tape` source scripts live in
 [`assets/`](assets/README.md). Regenerate them with
