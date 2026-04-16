@@ -111,6 +111,9 @@ func mergeUI(base, ov UISection) UISection {
 	if ov.AutoExpandSubAgent {
 		out.AutoExpandSubAgent = true
 	}
+	if ov.CompletedSubagentRetentionSecs != 0 {
+		out.CompletedSubagentRetentionSecs = ov.CompletedSubagentRetentionSecs
+	}
 	return out
 }
 

@@ -118,11 +118,19 @@ type ToolLaunchFlags struct {
 
 // UISection holds the [ui] table.
 type UISection struct {
-	Theme              string            `toml:"theme"`
-	PreviewRefreshMs   int               `toml:"preview_refresh_ms"`
-	ListWidthRatio     float64           `toml:"list_width_ratio"`
-	AutoExpandSubAgent bool              `toml:"auto_expand_subagents"`
-	Keymap             map[string]string `toml:"keymap"`
+	Theme              string  `toml:"theme"`
+	PreviewRefreshMs   int     `toml:"preview_refresh_ms"`
+	ListWidthRatio     float64 `toml:"list_width_ratio"`
+	AutoExpandSubAgent bool    `toml:"auto_expand_subagents"`
+	// CompletedSubagentRetentionSecs controls how long a completed
+	// or errored sub-agent row stays visible in the TUI before it
+	// is hidden. Positive: hide after N seconds (default 30).
+	// Negative: show forever. Users wanting "hide immediately"
+	// should set 1 — the 0-means-inherit convention shared with
+	// every other int in this struct prevents an explicit 0 in an
+	// override from reaching the final merged config.
+	CompletedSubagentRetentionSecs int               `toml:"completed_subagent_retention_secs"`
+	Keymap                         map[string]string `toml:"keymap"`
 
 	// Attention controls how new attention events are surfaced
 	// beyond the TUI. The zero value disables every channel so
@@ -174,10 +182,10 @@ type TmuxSection struct {
 
 // WorktreeSection holds the [worktree] table.
 type WorktreeSection struct {
-	Root              string                  `toml:"root"`
-	DefaultBaseBranch string                  `toml:"default_base_branch"`
-	AutoWorktree      bool                    `toml:"auto_worktree"`
-	DefaultSetup      string                  `toml:"default_setup"`
+	Root              string                   `toml:"root"`
+	DefaultBaseBranch string                   `toml:"default_base_branch"`
+	AutoWorktree      bool                     `toml:"auto_worktree"`
+	DefaultSetup      string                   `toml:"default_setup"`
 	Setup             map[string]WorktreeSetup `toml:"setup"`
 }
 
@@ -273,9 +281,10 @@ func Default() Config {
 			DefaultTool: "claude",
 		},
 		UI: UISection{
-			Theme:            "catppuccin-mocha",
-			PreviewRefreshMs: 250,
-			ListWidthRatio:   0.35,
+			Theme:                          "catppuccin-mocha",
+			PreviewRefreshMs:               250,
+			ListWidthRatio:                 0.35,
+			CompletedSubagentRetentionSecs: 30,
 		},
 		Live: LiveSection{
 			SubagentStalenessSecs: 10,

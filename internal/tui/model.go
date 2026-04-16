@@ -754,6 +754,7 @@ func (m *Model) fetchRefreshed(ctx context.Context) refreshedMsg {
 			if lerr != nil {
 				continue
 			}
+			rows = m.filterSubagents(rows)
 			if len(rows) > 0 {
 				subs[s.ID] = rows
 			}
@@ -1096,6 +1097,30 @@ func (m *Model) rebuildRows() {
 	if m.cursor < 0 {
 		m.cursor = 0
 	}
+}
+
+// filterSubagents removes completed/errored sub-agents whose
+// retention period has expired. The retention is driven by
+// config.UI.CompletedSubagentRetentionSecs.
+func (m *Model) filterSubagents(subs []store.Subagent) []store.Subagent {
+	retention := m.config.UI.CompletedSubagentRetentionSecs
+	if retention < 0 {
+		return subs // -1 means show forever
+	}
+	cutoff := time.Duration(retention) * time.Second
+	now := time.Now()
+	out := make([]store.Subagent, 0, len(subs))
+	for _, s := range subs {
+		status := store.SubagentStatus(s.Status)
+		if (status == store.SubagentCompleted || status == store.SubagentErrored) &&
+			s.CompletedAt.Valid {
+			if retention == 0 || now.Sub(s.CompletedAt.Time) > cutoff {
+				continue
+			}
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 // matchesStatusFilter returns true when the session belongs in
