@@ -108,6 +108,20 @@ var _ = Describe("SubagentsRepo", func() {
 		})
 	})
 
+	Describe("MarkErrored", func() {
+		It("flips the status to error", func() {
+			sub, _ := st.Subagents().Upsert(ctx, store.NewSubagent{
+				ParentSessionID: parent.ID, AgentID: "x",
+				SubagentType: "general-purpose", TranscriptPath: "/p",
+			})
+			Expect(st.Subagents().MarkErrored(ctx, sub.ID)).To(Succeed())
+
+			got, _ := st.Subagents().GetByAgentID(ctx, parent.ID, "x")
+			Expect(got.Status).To(Equal(string(store.SubagentErrored)))
+			Expect(got.CompletedAt.Valid).To(BeTrue())
+		})
+	})
+
 	Describe("ListByParent", func() {
 		It("returns every sub-agent in started_at order", func() {
 			for _, id := range []string{"a", "b", "c"} {

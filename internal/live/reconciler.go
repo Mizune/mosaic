@@ -47,30 +47,89 @@ type Reconciler struct {
 	// entries land so new rows get the right label.
 	agentMeta map[string]agentMetadata
 
+	// metaApplied tracks which sub-agents have had their metadata
+	// successfully applied (non-empty). Used to avoid repeatedly
+	// calling SetMetadata with empty values.
+	metaApplied map[string]bool
+
 	unsubscribe func()
+	sweepCancel context.CancelFunc
+
+	// staleness is the silence window used by the sweep loop to
+	// decide a background sub-agent has finished. It defaults to
+	// defaultStaleness but can be overridden via WithStaleness.
+	staleness time.Duration
+}
+
+// Option configures a Reconciler at construction time.
+type Option func(*Reconciler)
+
+// WithStaleness overrides the default sub-agent staleness window
+// used by the sweep loop. Zero or negative values are ignored.
+func WithStaleness(d time.Duration) Option {
+	return func(r *Reconciler) {
+		if d > 0 {
+			r.staleness = d
+		}
+	}
 }
 
 // NewReconciler constructs a Reconciler. Call [Reconciler.Start]
-// to begin consuming events.
-func NewReconciler(s *store.Store, b *bus.Bus) *Reconciler {
-	return &Reconciler{
+// to begin consuming events. Pass [WithStaleness] (or other
+// [Option]s) to override defaults.
+func NewReconciler(s *store.Store, b *bus.Bus, opts ...Option) *Reconciler {
+	r := &Reconciler{
 		store:             s,
 		bus:               b,
 		log:               slog.With("subsys", "live.reconciler"),
 		machines:          map[string]*claudeio.StateMachine{},
 		pendingAgentTools: map[string]pendingAgentTool{},
 		agentMeta:         map[string]agentMetadata{},
+		metaApplied:       map[string]bool{},
+		staleness:         defaultStaleness,
 	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
-// Start subscribes to the bus. The returned cleanup func unsubscribes
-// the handler so callers can `defer r.Stop()` from a TUI shutdown.
+// sweep-loop timing knobs. The values are conservative: the
+// background sub-agent case is rare enough that a 5 s poll is
+// cheap, and a 10 s silence window is long enough to avoid
+// flapping when Claude Code briefly pauses between tool calls.
+const (
+	sweepInterval    = 5 * time.Second
+	sweepTimeout     = 2 * time.Second
+	defaultStaleness = 10 * time.Second
+)
+
+// Start subscribes to the bus and launches a background sweep loop
+// that detects stale (completed) background sub-agents. Calling
+// Start twice is safe: the previous sweep goroutine is cancelled
+// before the new one is launched.
 func (r *Reconciler) Start() {
+	r.mu.Lock()
+	if r.sweepCancel != nil {
+		r.sweepCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	r.sweepCancel = cancel
+	r.mu.Unlock()
+
 	r.unsubscribe = r.bus.Subscribe(r.handle)
+	go r.sweepLoop(ctx)
 }
 
-// Stop unsubscribes the handler.
+// Stop unsubscribes the handler and tears down the sweep loop.
 func (r *Reconciler) Stop() {
+	r.mu.Lock()
+	cancel := r.sweepCancel
+	r.sweepCancel = nil
+	r.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	if r.unsubscribe != nil {
 		r.unsubscribe()
 		r.unsubscribe = nil
@@ -148,7 +207,22 @@ func (r *Reconciler) handleEntry(ctx context.Context, ev claudeio.TranscriptEntr
 		r.log.Warn("upsert subagent", "err", err)
 		return
 	}
-	_ = r.store.Subagents().SetMetadata(ctx, sub.ID, meta.Description, meta.SubagentType)
+
+	// Re-apply metadata when it becomes available. The initial
+	// Upsert (from SubagentSpawned) often runs before the parent's
+	// tool_result has been processed, leaving the row with a
+	// "general-purpose" placeholder. Once the agentMeta map is
+	// populated, we push the real values.
+	metaMapKey := subagentKey(ev.SessionID, ev.AgentID)
+	r.mu.Lock()
+	applied := r.metaApplied[metaMapKey]
+	r.mu.Unlock()
+	if !applied && (meta.Description != "" || meta.SubagentType != "") {
+		_ = r.store.Subagents().SetMetadata(ctx, sub.ID, meta.Description, meta.SubagentType)
+		r.mu.Lock()
+		r.metaApplied[metaMapKey] = true
+		r.mu.Unlock()
+	}
 
 	sm := r.machineFor(ev.SessionID, ev.AgentID)
 	sm.Observe(ev.Entry)
@@ -208,8 +282,9 @@ func (r *Reconciler) applyParentEntry(ctx context.Context, ev claudeio.Transcrip
 					continue
 				}
 				meta := agentMetadata{
-					Description:  pending.Input.Description,
-					SubagentType: pending.Input.SubagentType,
+					Description:     pending.Input.Description,
+					SubagentType:    pending.Input.SubagentType,
+					RunInBackground: pending.Input.RunInBackground,
 				}
 				r.storeAgentMeta(pending.ClaudeSessionID, agentID, meta)
 
@@ -231,6 +306,19 @@ func (r *Reconciler) applyParentEntry(ctx context.Context, ev claudeio.Transcrip
 					})
 					if err == nil {
 						_ = r.store.Subagents().SetMetadata(ctx, sub.ID, meta.Description, meta.SubagentType)
+						metaMapKey := subagentKey(pending.ClaudeSessionID, agentID)
+						r.mu.Lock()
+						r.metaApplied[metaMapKey] = true
+						r.mu.Unlock()
+
+						// For foreground agents, the tool_result
+						// means the agent has finished — route
+						// through markSubagentDone so caches are
+						// pruned alongside the status flip.
+						if !pending.Input.RunInBackground {
+							r.markSubagentDone(ctx, sub.ID,
+								pending.ClaudeSessionID, agentID, block.IsError)
+						}
 					}
 				}
 			}
@@ -375,11 +463,114 @@ func (r *Reconciler) lookupParentByWorktreeID(ctx context.Context, worktreeID st
 func (r *Reconciler) machineFor(sessionID, agentID string) *claudeio.StateMachine {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	key := sessionID + "::" + agentID
+	key := subagentKey(sessionID, agentID)
 	sm, ok := r.machines[key]
 	if !ok {
 		sm = claudeio.NewStateMachine()
 		r.machines[key] = sm
 	}
 	return sm
+}
+
+// subagentKey is the single source of truth for how the reconciler
+// composes (claudeSessionID, agentID) pairs into map keys.
+func subagentKey(claudeSessionID, agentID string) string {
+	return claudeSessionID + "::" + agentID
+}
+
+// markSubagentDone transitions a sub-agent row to a terminal state
+// (completed or errored) and drops the per-(session,agent) caches
+// that would otherwise grow unboundedly across the process
+// lifetime. Both the foreground tool_result path and the background
+// sweep path go through this helper so the lifecycle logic lives in
+// one place.
+func (r *Reconciler) markSubagentDone(ctx context.Context, subID, claudeSessionID, agentID string, isError bool) {
+	if isError {
+		_ = r.store.Subagents().MarkErrored(ctx, subID)
+	} else {
+		_ = r.store.Subagents().MarkCompleted(ctx, subID)
+	}
+	r.forgetSubagent(claudeSessionID, agentID)
+}
+
+// forgetSubagent removes per-agent entries from the reconciler's
+// in-memory maps. Safe to call multiple times.
+func (r *Reconciler) forgetSubagent(claudeSessionID, agentID string) {
+	key := subagentKey(claudeSessionID, agentID)
+	r.mu.Lock()
+	delete(r.machines, key)
+	delete(r.agentMeta, key)
+	delete(r.metaApplied, key)
+	r.mu.Unlock()
+}
+
+// sweepLoop runs a periodic check for stale background sub-agents
+// that have stopped producing transcript entries.
+func (r *Reconciler) sweepLoop(ctx context.Context) {
+	ticker := time.NewTicker(sweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sweepCtx, cancel := context.WithTimeout(ctx, sweepTimeout)
+			r.sweepStaleSubagents(sweepCtx, r.staleness)
+			cancel()
+		}
+	}
+}
+
+// sweepStaleSubagents checks all running sub-agents whose state
+// machines show no pending tools and no recent activity, and marks
+// them as completed. This handles background agents whose parent
+// tool_result arrives on launch, not completion.
+//
+// It queries the store directly for running rows (bounded read)
+// rather than walking every session, and falls back to the row's
+// StartedAt when the state machine has never observed an entry so
+// an agent that terminated without writing any transcript still
+// gets cleaned up.
+func (r *Reconciler) sweepStaleSubagents(ctx context.Context, staleness time.Duration) {
+	r.mu.Lock()
+	machines := make(map[string]*claudeio.StateMachine, len(r.machines))
+	for k, v := range r.machines {
+		machines[k] = v
+	}
+	r.mu.Unlock()
+
+	subs, err := r.store.Subagents().ListRunning(ctx)
+	if err != nil {
+		return
+	}
+	for _, sub := range subs {
+		key := subagentKey(sub.ClaudeSessionID, sub.AgentID)
+		sm, ok := machines[key]
+
+		// Determine the most recent signal of activity. If no
+		// state machine exists (e.g. the watcher never received
+		// an entry for this agent), fall back to StartedAt so
+		// agents that terminated before producing transcript
+		// output are still cleaned up.
+		var lastActive time.Time
+		pendingCount := 0
+		awaitingInput := false
+		if ok {
+			snap := sm.Snapshot()
+			lastActive = snap.LastEventAt
+			pendingCount = snap.PendingCount
+			awaitingInput = snap.AwaitingInput
+		}
+		if lastActive.IsZero() {
+			lastActive = sub.StartedAt
+		}
+
+		if pendingCount == 0 &&
+			!awaitingInput &&
+			!lastActive.IsZero() &&
+			time.Since(lastActive) > staleness {
+			r.markSubagentDone(ctx, sub.ID,
+				sub.ClaudeSessionID, sub.AgentID, false)
+		}
+	}
 }

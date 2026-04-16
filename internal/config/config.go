@@ -17,6 +17,7 @@ package config
 type Config struct {
 	Mosaic   MosaicSection   `toml:"mosaic"`
 	UI       UISection       `toml:"ui"`
+	Live     LiveSection     `toml:"live"`
 	Tmux     TmuxSection     `toml:"tmux"`
 	Worktree WorktreeSection `toml:"worktree"`
 	Hooks    HooksSection    `toml:"hooks"`
@@ -127,6 +128,24 @@ type UISection struct {
 	// beyond the TUI. The zero value disables every channel so
 	// users who prefer a silent UI get one by default.
 	Attention AttentionSection `toml:"attention"`
+}
+
+// LiveSection holds the [live] table that tunes the background
+// reconciler which drives sub-agent lifecycle transitions.
+// It lives next to [ui] so the UI-layer retention knob
+// (ui.completed_subagent_retention_secs) can be reasoned about
+// together with the reconciler-layer staleness window.
+type LiveSection struct {
+	// SubagentStalenessSecs is the silence window after which a
+	// running sub-agent with no pending tools and no new transcript
+	// activity is assumed to have finished. The reconciler's
+	// periodic sweep uses this threshold. 0 means "keep the
+	// default (10s)" — matching the 0-means-inherit convention
+	// used across this config.
+	//
+	// To avoid a terminal row flickering off-screen, keep
+	// ui.completed_subagent_retention_secs >= this value.
+	SubagentStalenessSecs int `toml:"subagent_staleness_secs"`
 }
 
 // AttentionSection holds [ui.attention] settings.
@@ -257,6 +276,9 @@ func Default() Config {
 			Theme:            "catppuccin-mocha",
 			PreviewRefreshMs: 250,
 			ListWidthRatio:   0.35,
+		},
+		Live: LiveSection{
+			SubagentStalenessSecs: 10,
 		},
 		Tmux: TmuxSection{
 			SocketName:    "mosaic",

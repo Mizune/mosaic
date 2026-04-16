@@ -126,6 +126,17 @@ func (r *SubagentsRepo) ListByParent(ctx context.Context, parentSessionID string
 	return out, err
 }
 
+// ListRunning returns every sub-agent whose status is still
+// "running", across all parent sessions. Used by the reconciler's
+// periodic sweep to find background agents that have gone silent.
+func (r *SubagentsRepo) ListRunning(ctx context.Context) ([]Subagent, error) {
+	var out []Subagent
+	err := r.db.SelectContext(ctx, &out,
+		`SELECT * FROM subagents WHERE status = ? ORDER BY started_at ASC`,
+		string(SubagentRunning))
+	return out, err
+}
+
 // SetMetadata updates the human-facing description and the
 // subagent_type for a row. It is called once the reconciler has
 // parsed the parent transcript's `Agent` tool_use/tool_result pair
@@ -160,18 +171,28 @@ func (r *SubagentsRepo) SetMetadata(ctx context.Context, id, description, subage
 
 // UpdateRunningTool patches the "what is this sub-agent doing right
 // now?" columns. Pass an empty toolName to clear them.
+//
+// The WHERE clause guards against late transcript entries flipping
+// a sub-agent that has already reached a terminal state back to
+// "running": once MarkCompleted / MarkErrored has run, stray
+// tool_use/tool_result blocks in the child transcript must not
+// resurrect the row.
 func (r *SubagentsRepo) UpdateRunningTool(ctx context.Context, id, toolName string, startedAt time.Time) error {
 	if toolName == "" {
 		_, err := r.db.ExecContext(ctx,
-			`UPDATE subagents SET current_tool = NULL, current_tool_started_at = NULL, status = ? WHERE id = ?`,
-			string(SubagentRunning), id)
+			`UPDATE subagents
+             SET current_tool = NULL, current_tool_started_at = NULL, status = ?
+             WHERE id = ? AND status IN (?, ?)`,
+			string(SubagentRunning), id,
+			string(SubagentSpawning), string(SubagentRunning))
 		return err
 	}
 	_, err := r.db.ExecContext(ctx, `
         UPDATE subagents
         SET current_tool = ?, current_tool_started_at = ?, status = ?
-        WHERE id = ?`,
-		toolName, startedAt.UTC(), string(SubagentRunning), id)
+        WHERE id = ? AND status IN (?, ?)`,
+		toolName, startedAt.UTC(), string(SubagentRunning), id,
+		string(SubagentSpawning), string(SubagentRunning))
 	return err
 }
 
@@ -182,6 +203,16 @@ func (r *SubagentsRepo) MarkCompleted(ctx context.Context, id string) error {
         SET status = ?, completed_at = ?, current_tool = NULL, current_tool_started_at = NULL
         WHERE id = ?`,
 		string(SubagentCompleted), time.Now().UTC(), id)
+	return err
+}
+
+// MarkErrored records that a sub-agent finished with an error.
+func (r *SubagentsRepo) MarkErrored(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, `
+        UPDATE subagents
+        SET status = ?, completed_at = ?, current_tool = NULL, current_tool_started_at = NULL
+        WHERE id = ?`,
+		string(SubagentErrored), time.Now().UTC(), id)
 	return err
 }
 

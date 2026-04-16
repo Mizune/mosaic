@@ -24,6 +24,7 @@ func Merge(base, override Config) Config {
 	out := base
 	out.Mosaic = mergeMosaic(base.Mosaic, override.Mosaic)
 	out.UI = mergeUI(base.UI, override.UI)
+	out.Live = mergeLive(base.Live, override.Live)
 	out.Tmux = mergeTmux(base.Tmux, override.Tmux)
 	out.Worktree = mergeWorktree(base.Worktree, override.Worktree)
 	out.Hooks = mergeHooks(base.Hooks, override.Hooks)
@@ -109,6 +110,14 @@ func mergeUI(base, ov UISection) UISection {
 	}
 	if ov.AutoExpandSubAgent {
 		out.AutoExpandSubAgent = true
+	}
+	return out
+}
+
+func mergeLive(base, ov LiveSection) LiveSection {
+	out := base
+	if ov.SubagentStalenessSecs != 0 {
+		out.SubagentStalenessSecs = ov.SubagentStalenessSecs
 	}
 	return out
 }

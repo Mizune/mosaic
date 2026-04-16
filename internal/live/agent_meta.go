@@ -11,8 +11,9 @@ import (
 // transcript's `Agent` tool_use input once the matching tool_result
 // has told us the agent_id the two halves refer to.
 type agentMetadata struct {
-	Description  string
-	SubagentType string
+	Description     string
+	SubagentType    string
+	RunInBackground bool
 }
 
 // pendingAgentTool is half of an Agent tool_use/tool_result pair: the

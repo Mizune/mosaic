@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/Mizune/mosaic/internal/bus"
 	"github.com/Mizune/mosaic/internal/claudeio"
@@ -194,7 +195,11 @@ func (r *runtime) startLive(ctx context.Context, home string) error {
 		r.sessions.HookSocketPath = socketPath
 	}
 
-	r.reconciler = live.NewReconciler(r.store, r.bus)
+	var recOpts []live.Option
+	if secs := r.config.Live.SubagentStalenessSecs; secs > 0 {
+		recOpts = append(recOpts, live.WithStaleness(time.Duration(secs)*time.Second))
+	}
+	r.reconciler = live.NewReconciler(r.store, r.bus, recOpts...)
 	r.reconciler.Start()
 
 	r.binder = live.NewBinder(r.store, r.watcher, home)

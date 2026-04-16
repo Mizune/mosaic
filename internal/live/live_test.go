@@ -361,3 +361,123 @@ func TestBinder_DiscoversAndBinds(t *testing.T) {
 	}
 	t.Fatal("timed out waiting for binder to bind the claude session id")
 }
+
+// Test that a foreground Agent tool_use → tool_result pair in the
+// parent transcript marks the sub-agent as completed.
+func TestReconciler_ForegroundAgentToolResultMarksCompleted(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	parent, err := st.Sessions().Insert(ctx, store.NewSession{
+		Name: "p", WorktreePath: "/tmp/p",
+	})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx,
+		`UPDATE sessions SET claude_session_id = ? WHERE id = ?`,
+		"claude-sess", parent.ID); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+
+	b := bus.New()
+	defer b.Close()
+	rec := live.NewReconciler(st, b)
+	rec.Start()
+	defer rec.Stop()
+
+	// 1. Parent publishes Agent tool_use (foreground).
+	agentInput := `{"description":"refactor code","subagent_type":"code-reviewer","prompt":"do it","run_in_background":false}`
+	b.Publish(claudeio.TranscriptEntry{
+		ProjectPath: "/tmp/p",
+		SessionID:   "claude-sess",
+		Entry:       buildAgentToolUseEntry("tu1", agentInput),
+	})
+
+	time.Sleep(50 * time.Millisecond)
+
+	// 2. Parent publishes tool_result with agentId.
+	resultContent := `[{"type":"text","text":"agentId: deadbeef\nDone."}]`
+	b.Publish(claudeio.TranscriptEntry{
+		ProjectPath: "/tmp/p",
+		SessionID:   "claude-sess",
+		Entry:       buildAgentToolResultEntry("tu1", resultContent, false),
+	})
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		sub, err := st.Subagents().GetByAgentID(ctx, parent.ID, "deadbeef")
+		if err == nil && sub.Status == string(store.SubagentCompleted) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for sub-agent to be marked completed")
+}
+
+// Test that a foreground Agent tool_result with IsError marks the
+// sub-agent as errored.
+func TestReconciler_ForegroundAgentErrorMarksErrored(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	parent, err := st.Sessions().Insert(ctx, store.NewSession{
+		Name: "p", WorktreePath: "/tmp/p",
+	})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx,
+		`UPDATE sessions SET claude_session_id = ? WHERE id = ?`,
+		"claude-sess", parent.ID); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+
+	b := bus.New()
+	defer b.Close()
+	rec := live.NewReconciler(st, b)
+	rec.Start()
+	defer rec.Stop()
+
+	agentInput := `{"description":"broken task","subagent_type":"general-purpose","prompt":"fail","run_in_background":false}`
+	b.Publish(claudeio.TranscriptEntry{
+		ProjectPath: "/tmp/p",
+		SessionID:   "claude-sess",
+		Entry:       buildAgentToolUseEntry("tu1", agentInput),
+	})
+
+	time.Sleep(50 * time.Millisecond)
+
+	resultContent := `[{"type":"text","text":"agentId: errbeef\nError occurred."}]`
+	b.Publish(claudeio.TranscriptEntry{
+		ProjectPath: "/tmp/p",
+		SessionID:   "claude-sess",
+		Entry:       buildAgentToolResultEntry("tu1", resultContent, true),
+	})
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		sub, err := st.Subagents().GetByAgentID(ctx, parent.ID, "errbeef")
+		if err == nil && sub.Status == string(store.SubagentErrored) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for sub-agent to be marked errored")
+}
