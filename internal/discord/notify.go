@@ -35,6 +35,15 @@ func (br *Bridge) handleSessionStarted(ev bus.SessionStarted) {
 		return
 	}
 
+	// Idempotency: if a thread already exists for this session
+	// (e.g. respawn after a natural tmux death that did not
+	// produce a SessionStopped event), reuse it.
+	if existing := br.threadFor(ev.SessionID); existing != "" {
+		br.log.Debug("thread already exists, skipping creation",
+			"session", ev.SessionID, "thread", existing)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
 	defer cancel()
 
