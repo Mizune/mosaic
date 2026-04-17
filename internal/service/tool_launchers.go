@@ -70,9 +70,23 @@ func LaunchCommandForTool(tool store.SessionTool) string {
 //     added (when a transcript exists) because the user's
 //     intent is "pick up where I left off".
 func LaunchCommandForSession(tool store.SessionTool, worktreePath string, flags config.ToolLaunchFlags, respawn bool) string {
+	argv := LaunchArgvForSession(tool, worktreePath, flags, respawn)
+	return strings.Join(argv, " ")
+}
+
+// LaunchArgvForSession is the argv equivalent of
+// [LaunchCommandForSession]. Call this (instead of the string
+// variant) when the resulting argv is going to be wrapped by
+// another command — e.g. `docker run … claude --continue`. Emitting
+// a pre-split argv avoids a needless shell re-parse that would
+// mangle binds and quoted args later in the pipeline.
+//
+// Returns an empty slice for the shell tool, matching the string
+// variant's empty-string contract.
+func LaunchArgvForSession(tool store.SessionTool, worktreePath string, flags config.ToolLaunchFlags, respawn bool) []string {
 	base := LaunchCommandForTool(tool)
 	if base == "" {
-		return ""
+		return nil
 	}
 
 	parts := []string{base}
@@ -86,7 +100,7 @@ func LaunchCommandForSession(tool store.SessionTool, worktreePath string, flags 
 	if len(flags.ExtraArgs) > 0 {
 		parts = append(parts, flags.ExtraArgs...)
 	}
-	return strings.Join(parts, " ")
+	return parts
 }
 
 // claudeFlagArgs maps the typed config knobs to actual Claude

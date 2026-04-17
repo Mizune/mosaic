@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Mizune/mosaic/internal/sandbox"
 	"github.com/Mizune/mosaic/internal/service"
 	"github.com/Mizune/mosaic/internal/store"
 )
@@ -13,16 +14,18 @@ import (
 // newCreateCmd builds `mosaic new <name>`.
 func newCreateCmd() *cobra.Command {
 	var (
-		opts          runtimeOptions
-		projectFlag   string
-		toolFlag      string
-		branchFlag    string
-		commandFlag   string
-		worktreeFlag  bool
-		setupFlag     string
-		baseRefFlag   string
-		destFlag      string
-		continueFlag  bool
+		opts             runtimeOptions
+		projectFlag      string
+		toolFlag         string
+		branchFlag       string
+		commandFlag      string
+		worktreeFlag     bool
+		setupFlag        string
+		baseRefFlag      string
+		destFlag         string
+		continueFlag     bool
+		sandboxFlag      string
+		sandboxImageFlag string
 	)
 
 	cmd := &cobra.Command{
@@ -75,6 +78,22 @@ func newCreateCmd() *cobra.Command {
 				worktreePath = dest
 			}
 
+			// Sandbox mode is only forwarded when the user set
+			// --sandbox explicitly. Leaving it empty lets the
+			// service fall back to the per-project opt-in.
+			var sandboxMode sandbox.Mode
+			if sandboxFlag != "" {
+				sandboxMode = sandbox.ParseMode(sandboxFlag)
+				// ParseMode falls back to ModeNone for unknown
+				// tokens; reject anything except the explicit
+				// "none" spelling so typos do not silently
+				// disable sandboxing.
+				if sandboxMode == sandbox.ModeNone && sandboxFlag != sandbox.ModeNone.String() {
+					return fmt.Errorf("unknown --sandbox value %q (expected: %s, %s)",
+						sandboxFlag, sandbox.ModeNone, sandbox.ModeDocker)
+				}
+			}
+
 			row, err := rt.sessions.Create(cmd.Context(), service.CreateInput{
 				Name:            args[0],
 				ProjectPath:     projectAbs,
@@ -87,6 +106,8 @@ func newCreateCmd() *cobra.Command {
 				WorktreeRepo:    projectAbs,
 				WorktreeBaseRef: baseRefFlag,
 				WorktreeSetup:   setupRecipe,
+				SandboxMode:     sandboxMode,
+				SandboxImage:    sandboxImageFlag,
 			})
 			if err != nil {
 				return err
@@ -107,6 +128,8 @@ func newCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&baseRefFlag, "base", "", "Base ref to branch from (default: current branch)")
 	cmd.Flags().StringVar(&destFlag, "dest", "", "Worktree destination path (default: <project>/.worktrees/<branch>)")
 	cmd.Flags().BoolVar(&continueFlag, "continue", false, "Resume the most recent Claude session in this worktree (claude --continue)")
+	cmd.Flags().StringVar(&sandboxFlag, "sandbox", "", "Sandbox mode for this session: none (default) or docker")
+	cmd.Flags().StringVar(&sandboxImageFlag, "sandbox-image", "", "Docker image override for --sandbox=docker (defaults to [docker].image)")
 	return cmd
 }
 

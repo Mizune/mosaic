@@ -116,7 +116,7 @@ var _ = Describe("SessionService", func() {
 
 	Describe("hook environment", func() {
 		It("exports MOSAIC_* variables when HookSocketPath is set", func() {
-			svc.HookSocketPath = "/tmp/mosaic-test/pid-1234"
+			svc.Cfg.HookSocketPath = "/tmp/mosaic-test/pid-1234"
 
 			row, err := svc.Create(ctx, service.CreateInput{
 				Name:         "with-hooks",
@@ -132,7 +132,7 @@ var _ = Describe("SessionService", func() {
 		})
 
 		It("leaves MOSAIC_* unset when no hook server is running", func() {
-			// Default: svc.HookSocketPath is empty.
+			// Default: svc.Cfg.HookSocketPath is empty.
 			row, err := svc.Create(ctx, service.CreateInput{
 				Name:         "no-hooks",
 				WorktreePath: GinkgoT().TempDir(),
@@ -144,7 +144,7 @@ var _ = Describe("SessionService", func() {
 		})
 
 		It("re-exports MOSAIC_* when respawning a dead tmux session on attach", func() {
-			svc.HookSocketPath = "/tmp/mosaic-test/pid-1234"
+			svc.Cfg.HookSocketPath = "/tmp/mosaic-test/pid-1234"
 
 			row, err := svc.Create(ctx, service.CreateInput{
 				Name:         "respawn-hooks",

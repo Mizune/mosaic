@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/Mizune/mosaic/internal/sandbox"
 	"github.com/Mizune/mosaic/internal/service"
 	"github.com/Mizune/mosaic/internal/store"
 )
@@ -25,7 +26,16 @@ const (
 	stepProject
 	stepTool
 	stepWorktree
+	stepSandbox
 	stepDone
+)
+
+// Checkbox glyphs shared across the wizard's toggle steps
+// (worktree, sandbox). Defined once so the render code reads
+// declaratively and drifts between steps are impossible.
+const (
+	checkboxOn  = "[x]"
+	checkboxOff = "[ ]"
 )
 
 // wizardState is the per-modal state for the new-session wizard. It
@@ -62,6 +72,16 @@ type wizardState struct {
 	claudeAutoMode          bool
 	claudeBypassPermissions bool
 	claudeContinue          bool
+
+	// Sandbox step state. dockerAvailable is computed once when
+	// the wizard opens so we do not re-probe $PATH on every
+	// re-render. sandboxMode is the user's selection; sandboxImage
+	// lets them override the [docker].image default without
+	// leaving the wizard (empty = use config default).
+	sandboxMode      sandbox.Mode
+	sandboxImage     string
+	sandboxImageEdit bool // true when the image field accepts keystrokes
+	dockerAvailable  bool
 }
 
 // registeredProject is the wizard-facing view of one project entry.
@@ -97,6 +117,11 @@ func (m *Model) newWizardState() wizardState {
 		defaultSetup = "default"
 	}
 
+	// Probe docker availability once so every re-render of the
+	// sandbox step can show a grayed-out option without paying
+	// another exec.LookPath call.
+	dockerOk := sandbox.DockerAvailable()
+
 	return wizardState{
 		step:            stepName,
 		project:         project,
@@ -107,6 +132,10 @@ func (m *Model) newWizardState() wizardState {
 		setup:           defaultSetup,
 		toolChoice:      []string{"claude", "codex", "gemini", "shell"},
 		setupChoice:     []string{"default"},
+		// Default to host execution; Docker is strictly opt-in.
+		sandboxMode:     sandbox.ModeNone,
+		sandboxImage:    m.config.Docker.Image,
+		dockerAvailable: dockerOk,
 	}
 }
 
@@ -192,6 +221,12 @@ func (m *Model) updateWizard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Snap the path field back to the highlighted entry so
 		// the user sees a coherent state.
 		w.project = w.projectRegistry[w.cursor].path
+		return m, nil
+	}
+	if key == "esc" && w.step == stepSandbox && w.sandboxImageEdit {
+		// One level of undo: exit image edit mode without
+		// closing the wizard. Matches the stepProject pattern.
+		w.sandboxImageEdit = false
 		return m, nil
 	}
 	if key == "esc" {
@@ -292,6 +327,10 @@ func (m *Model) updateWizard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if len(w.branch) > 0 {
 				w.branch = w.branch[:len(w.branch)-1]
 			}
+		case stepSandbox:
+			if w.sandboxImageEdit && len(w.sandboxImage) > 0 {
+				w.sandboxImage = w.sandboxImage[:len(w.sandboxImage)-1]
+			}
 		}
 		return m, nil
 
@@ -305,6 +344,16 @@ func (m *Model) updateWizard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case " ":
 		if w.step == stepWorktree {
 			w.wantWorktree = !w.wantWorktree
+			return m, nil
+		}
+		if w.step == stepSandbox && !w.sandboxImageEdit {
+			// Space toggles between None and Docker when not editing
+			// the image field.
+			if w.sandboxMode == sandbox.ModeDocker {
+				w.sandboxMode = sandbox.ModeNone
+			} else {
+				w.sandboxMode = sandbox.ModeDocker
+			}
 			return m, nil
 		}
 		// In other steps, fall through and treat space as input.
@@ -404,6 +453,20 @@ func (m *Model) updateWizard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case stepWorktree:
 		w.branch += key
+
+	case stepSandbox:
+		switch {
+		case w.sandboxImageEdit:
+			// Typing while editing the image field appends to it.
+			w.sandboxImage += key
+		case key == "i":
+			// vim-style: "i" enters image edit mode.
+			w.sandboxImageEdit = true
+		case key == "n":
+			w.sandboxMode = sandbox.ModeNone
+		case key == "d":
+			w.sandboxMode = sandbox.ModeDocker
+		}
 	}
 	return m, nil
 }
@@ -466,6 +529,19 @@ func (m *Model) advanceWizard() (tea.Model, tea.Cmd) {
 			w.confirmation = "branch name is required when creating a worktree"
 			return m, nil
 		}
+		w.confirmation = ""
+		w.step = stepSandbox
+		w.cursor = 0
+
+	case stepSandbox:
+		if w.sandboxMode == sandbox.ModeDocker && !w.dockerAvailable {
+			w.confirmation = "docker is not on $PATH — install Docker Desktop or pick 'None'"
+			return m, nil
+		}
+		if w.sandboxMode == sandbox.ModeDocker && strings.TrimSpace(w.sandboxImage) == "" {
+			w.confirmation = "docker mode requires an image — set [docker].image in config.toml or type one here"
+			return m, nil
+		}
 		input := service.CreateInput{
 			Name:          w.name,
 			ProjectPath:   w.project,
@@ -473,6 +549,8 @@ func (m *Model) advanceWizard() (tea.Model, tea.Cmd) {
 			Tool:          store.SessionTool(w.tool),
 			Branch:        w.branch,
 			ForceContinue: w.claudeContinue,
+			SandboxMode:   w.sandboxMode,
+			SandboxImage:  strings.TrimSpace(w.sandboxImage),
 		}
 		if w.wantWorktree {
 			// Match the logic in cmd_new.go so the worktree lands
@@ -558,7 +636,7 @@ func clampWizardCursor(w *wizardState, n int) int {
 		if n >= len(w.toolChoice) {
 			return len(w.toolChoice) - 1
 		}
-	case stepWorktree:
+	case stepWorktree, stepSandbox:
 		return 0
 	}
 	if n < 0 {
@@ -647,17 +725,17 @@ func (m *Model) renderWizard() string {
 		// are per-session overrides — the global config defaults
 		// are in [mosaic.tools.claude].
 		if w.cursor >= 0 && w.cursor < len(w.toolChoice) && w.toolChoice[w.cursor] == "claude" {
-			autoBox := "[ ]"
+			autoBox := checkboxOff
 			if w.claudeAutoMode {
-				autoBox = "[x]"
+				autoBox = checkboxOn
 			}
-			bypassBox := "[ ]"
+			bypassBox := checkboxOff
 			if w.claudeBypassPermissions {
-				bypassBox = "[x]"
+				bypassBox = checkboxOn
 			}
-			continueBox := "[ ]"
+			continueBox := checkboxOff
 			if w.claudeContinue {
-				continueBox = "[x]"
+				continueBox = checkboxOn
 			}
 			lines = append(lines, "",
 				m.theme.SectionTitle.Render("Claude options"),
@@ -674,9 +752,9 @@ func (m *Model) renderWizard() string {
 		)
 
 	case stepWorktree:
-		toggle := "[ ]"
+		toggle := checkboxOff
 		if w.wantWorktree {
-			toggle = "[x]"
+			toggle = checkboxOn
 		}
 		lines = append(lines,
 			m.theme.MutedText.Render("optionally isolate this session in its own git worktree"),
@@ -694,7 +772,45 @@ func (m *Model) renderWizard() string {
 		}
 		lines = append(lines,
 			"",
-			m.theme.MutedText.Render("[Enter] create  [Shift+Tab] back  [Esc] cancel"),
+			m.theme.MutedText.Render("[Enter] next  [Shift+Tab] back  [Esc] cancel"),
+		)
+
+	case stepSandbox:
+		noneMark := checkboxOn
+		dockerMark := checkboxOff
+		if w.sandboxMode == sandbox.ModeDocker {
+			noneMark = checkboxOff
+			dockerMark = checkboxOn
+		}
+		dockerLabel := "Docker sandbox"
+		dockerHint := m.theme.MutedText.Render("(d to select)")
+		if !w.dockerAvailable {
+			dockerLabel = m.theme.MutedText.Render("Docker sandbox — docker binary not found on $PATH")
+			dockerHint = m.theme.MutedText.Render("(install Docker to enable)")
+		}
+		lines = append(lines,
+			m.theme.MutedText.Render("optionally run the agent inside an isolated Docker container"),
+			m.theme.MutedText.Render("(the worktree is bind-mounted; host auth is mounted read-only)"),
+			"",
+			"  "+noneMark+" None — run on host  "+m.theme.MutedText.Render("(n to select, Space to toggle)"),
+			"  "+dockerMark+" "+dockerLabel+"  "+dockerHint,
+		)
+		if w.sandboxMode == sandbox.ModeDocker {
+			imageLine := w.sandboxImage
+			if imageLine == "" {
+				imageLine = m.theme.MutedText.Render("(not set — type i to edit)")
+			}
+			if w.sandboxImageEdit {
+				imageLine = w.sandboxImage + "_"
+			}
+			lines = append(lines,
+				"",
+				"Image: "+m.theme.AttentionTag.Render(">")+" "+imageLine,
+			)
+		}
+		lines = append(lines,
+			"",
+			m.theme.MutedText.Render("[Enter] create  [Shift+Tab] back  [Esc] cancel  [i] edit image"),
 		)
 	}
 
@@ -776,13 +892,15 @@ func (m *Model) renderPathCandidates(cands []string, limit int) string {
 func wizardStepName(s wizardStep) string {
 	switch s {
 	case stepName:
-		return "Name (1/4)"
+		return "Name (1/5)"
 	case stepProject:
-		return "Project (2/4)"
+		return "Project (2/5)"
 	case stepTool:
-		return "Tool (3/4)"
+		return "Tool (3/5)"
 	case stepWorktree:
-		return "Worktree (4/4)"
+		return "Worktree (4/5)"
+	case stepSandbox:
+		return "Sandbox (5/5)"
 	}
 	return ""
 }

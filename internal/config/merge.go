@@ -29,7 +29,47 @@ func Merge(base, override Config) Config {
 	out.Worktree = mergeWorktree(base.Worktree, override.Worktree)
 	out.Hooks = mergeHooks(base.Hooks, override.Hooks)
 	out.Discord = mergeDiscord(base.Discord, override.Discord)
+	out.Docker = mergeDocker(base.Docker, override.Docker)
 	out.Projects = mergeProjects(base.Projects, override.Projects)
+	return out
+}
+
+// mergeDocker layers a project-local [docker] override on top of
+// the global defaults. Lists replace the base when the override
+// sets them; the mount / cleanup toggles are *bool so nil means
+// "inherit" and an explicit true/false wins.
+//
+// This matches the behaviour of every other merge* function in
+// this file: the override only contributes fields it actually
+// carries, and absence is indistinguishable from default. The
+// nullable-bool representation is what lets the TOML decoder
+// tell "mount_ssh = false" apart from "mount_ssh is absent".
+func mergeDocker(base, ov DockerSection) DockerSection {
+	out := base
+	if ov.Image != "" {
+		out.Image = ov.Image
+	}
+	if len(ov.ExtraArgs) > 0 {
+		out.ExtraArgs = append([]string(nil), ov.ExtraArgs...)
+	}
+	if len(ov.DefaultMounts) > 0 {
+		out.DefaultMounts = append([]string(nil), ov.DefaultMounts...)
+	}
+	if len(ov.FirewallAllowlist) > 0 {
+		out.FirewallAllowlist = append([]string(nil), ov.FirewallAllowlist...)
+	}
+	if ov.MountClaude != nil {
+		out.MountClaude = ov.MountClaude
+	}
+	if ov.MountGh != nil {
+		out.MountGh = ov.MountGh
+	}
+	if ov.MountSSH != nil {
+		out.MountSSH = ov.MountSSH
+	}
+	if ov.AutoCleanup != nil {
+		out.AutoCleanup = ov.AutoCleanup
+	}
 	return out
 }
 
