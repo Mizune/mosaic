@@ -205,37 +205,54 @@ type WorktreeSection struct {
 }
 
 // WorktreeSetup describes a single named worktree setup recipe.
+//
+// Every field is tagged `omitempty` so configwriter-emitted fragments
+// only list the knobs the user actually set, keeping the resulting
+// TOML compact and readable like something a human would write.
+//
+// This aligns with merge semantics defined in internal/config/merge.go:
+// zero/empty override values are treated as "inherit from base" (merge
+// only replaces when the override is non-zero / non-empty), so emitting
+// them as omitted is equivalent to emitting them as explicit empties.
+// Concretely, a user-written `copy = []` does NOT round-trip through
+// decode-marshal — it comes back omitted — but because merge already
+// ignores an empty override slice, there is no observable behavior
+// change.
+//
+// "Explicit empty override" is therefore not a supported pattern. Use
+// CopyExtra / CommandsExtra when you want to extend the parent setup,
+// or set Copy / Commands to a concrete replacement list.
 type WorktreeSetup struct {
 	// Copy is the list of files to copy from the source repo into the
 	// worktree. Project configs replace the global list when set.
-	Copy []string `toml:"copy"`
+	Copy []string `toml:"copy,omitempty"`
 
 	// CopyExtra is appended to whatever Copy resolves to. Use this to
 	// extend a parent setup without restating its file list.
-	CopyExtra []string `toml:"copy_extra"`
+	CopyExtra []string `toml:"copy_extra,omitempty"`
 
 	// CopyIgnored copies .gitignore'd files (e.g. .env, build caches)
 	// in addition to the explicit Copy list.
-	CopyIgnored bool `toml:"copy_ignored"`
+	CopyIgnored bool `toml:"copy_ignored,omitempty"`
 
 	// CopyUntracked copies untracked files in addition to the explicit
 	// Copy list.
-	CopyUntracked bool `toml:"copy_untracked"`
+	CopyUntracked bool `toml:"copy_untracked,omitempty"`
 
 	// Commands run sequentially after files are copied. Project configs
 	// replace the global list when set.
-	Commands []string `toml:"commands"`
+	Commands []string `toml:"commands,omitempty"`
 
 	// CommandsExtra is appended to whatever Commands resolves to.
-	CommandsExtra []string `toml:"commands_extra"`
+	CommandsExtra []string `toml:"commands_extra,omitempty"`
 
 	// PostCreateHook is the path (relative to the project) to a script
 	// run after Commands. Empty disables the hook.
-	PostCreateHook string `toml:"post_create_hook"`
+	PostCreateHook string `toml:"post_create_hook,omitempty"`
 
 	// Env is a set of environment variables exported when running
 	// Commands and the post-create hook. Maps merge key-by-key.
-	Env map[string]string `toml:"env"`
+	Env map[string]string `toml:"env,omitempty"`
 }
 
 // HooksSection holds the [hooks] table that controls Claude Code hook

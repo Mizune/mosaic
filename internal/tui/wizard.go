@@ -26,6 +26,11 @@ const (
 	stepProject
 	stepTool
 	stepWorktree
+	// stepWorktreeSetup is only visited when wantWorktree is
+	// true. It lets the user pick an existing recipe from
+	// config.Worktree.Setup or open the recipe wizard via the
+	// sentinel "+ create new recipe" entry.
+	stepWorktreeSetup
 	stepSandbox
 	stepDone
 )
@@ -62,7 +67,7 @@ type wizardState struct {
 	setup             string
 	cursor            int
 	toolChoice        []string
-	setupChoice       []string
+	setupChoice       []setupChoice
 	confirmation      string
 
 	// Claude-specific launch mode toggles. These override the
@@ -131,7 +136,7 @@ func (m *Model) newWizardState() wizardState {
 		wantWorktree:    m.config.Worktree.AutoWorktree,
 		setup:           defaultSetup,
 		toolChoice:      []string{"claude", "codex", "gemini", "shell"},
-		setupChoice:     []string{"default"},
+		setupChoice:     buildSetupChoices(m.config),
 		// Default to host execution; Docker is strictly opt-in.
 		sandboxMode:     sandbox.ModeNone,
 		sandboxImage:    m.config.Docker.Image,
@@ -415,6 +420,17 @@ func (m *Model) updateWizard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		w.project += key
 		w.projectCandidates = nil
 
+	case stepWorktreeSetup:
+		switch key {
+		case "j":
+			w.cursor = clampWizardCursor(w, w.cursor+1)
+		case "k":
+			if w.cursor > 0 {
+				w.cursor--
+			}
+		}
+		return m, nil
+
 	case stepTool:
 		switch key {
 		case "j":
@@ -529,9 +545,36 @@ func (m *Model) advanceWizard() (tea.Model, tea.Cmd) {
 			w.confirmation = "branch name is required when creating a worktree"
 			return m, nil
 		}
+		if w.wantWorktree {
+			// Offer a setup recipe picker — this is where the user
+			// can also jump into the recipe wizard to build a new
+			// recipe before committing to session creation.
+			w.confirmation = ""
+			w.setupChoice = buildSetupChoices(m.config)
+			w.cursor = setupChoiceIndex(w.setupChoice, w.setup)
+			w.step = stepWorktreeSetup
+			return m, nil
+		}
 		w.confirmation = ""
 		w.step = stepSandbox
 		w.cursor = 0
+
+	case stepWorktreeSetup:
+		if w.cursor < 0 || w.cursor >= len(w.setupChoice) {
+			w.confirmation = "pick a setup recipe first"
+			return m, nil
+		}
+		choice := w.setupChoice[w.cursor]
+		switch choice.kind {
+		case choiceNewRecipe:
+			m.openRecipeWizardFromNewSession(w.project)
+			return m, nil
+		case choiceRecipe:
+			w.setup = choice.name
+			w.confirmation = ""
+			w.step = stepSandbox
+			w.cursor = 0
+		}
 
 	case stepSandbox:
 		if w.sandboxMode == sandbox.ModeDocker && !w.dockerAvailable {
@@ -542,43 +585,56 @@ func (m *Model) advanceWizard() (tea.Model, tea.Cmd) {
 			w.confirmation = "docker mode requires an image — set [docker].image in config.toml or type one here"
 			return m, nil
 		}
-		input := service.CreateInput{
-			Name:          w.name,
-			ProjectPath:   w.project,
-			WorktreePath:  w.project,
-			Tool:          store.SessionTool(w.tool),
-			Branch:        w.branch,
-			ForceContinue: w.claudeContinue,
-			SandboxMode:   w.sandboxMode,
-			SandboxImage:  strings.TrimSpace(w.sandboxImage),
-		}
-		if w.wantWorktree {
-			// Match the logic in cmd_new.go so the worktree lands
-			// under <project>/.worktrees/<branch> instead of on
-			// top of the project directory itself.
-			input.CreateWorktree = true
-			input.WorktreeRepo = w.project
-			input.WorktreePath = filepath.Join(w.project, ".worktrees", w.branch)
-		}
-		// If the user toggled Claude-specific flags in the tool
-		// step, build a custom Command that overrides the global
-		// config for this one session. When both are false, we
-		// leave Command empty so the service uses the normal
-		// LaunchCommandForSession path (including --continue).
-		if w.tool == "claude" && (w.claudeAutoMode || w.claudeBypassPermissions) {
-			parts := []string{"claude"}
-			if w.claudeBypassPermissions {
-				parts = append(parts, "--dangerously-skip-permissions")
-			}
-			if w.claudeAutoMode {
-				parts = append(parts, "--auto")
-			}
-			input.Command = strings.Join(parts, " ")
-		}
-		m.screen = ScreenTop
-		return m, m.runCreate(input)
+		return m.finaliseWizard()
 	}
 	return m, nil
+}
+
+// finaliseWizard assembles the CreateInput and kicks off session
+// creation. Callers are responsible for validating wizard-step
+// specifics (branch name, etc.) before calling this.
+func (m *Model) finaliseWizard() (tea.Model, tea.Cmd) {
+	w := &m.wizard
+	input := service.CreateInput{
+		Name:          w.name,
+		ProjectPath:   w.project,
+		WorktreePath:  w.project,
+		Tool:          store.SessionTool(w.tool),
+		Branch:        w.branch,
+		ForceContinue: w.claudeContinue,
+		SandboxMode:   w.sandboxMode,
+		SandboxImage:  strings.TrimSpace(w.sandboxImage),
+	}
+	if w.wantWorktree {
+		input.CreateWorktree = true
+		input.WorktreeRepo = w.project
+		input.WorktreePath = filepath.Join(w.project, ".worktrees", w.branch)
+		input.WorktreeSetup = m.config.Worktree.Setup[w.setup]
+	}
+	if w.tool == "claude" && (w.claudeAutoMode || w.claudeBypassPermissions) {
+		parts := []string{"claude"}
+		if w.claudeBypassPermissions {
+			parts = append(parts, "--dangerously-skip-permissions")
+		}
+		if w.claudeAutoMode {
+			parts = append(parts, "--auto")
+		}
+		input.Command = strings.Join(parts, " ")
+	}
+	m.screen = ScreenTop
+	return m, m.runCreate(input)
+}
+
+// setupChoiceIndex returns the index of the recipe named name in
+// choices, or 0 if it is not present (a safe default that lands the
+// cursor on the first entry).
+func setupChoiceIndex(choices []setupChoice, name string) int {
+	for i, c := range choices {
+		if c.kind == choiceRecipe && c.name == name {
+			return i
+		}
+	}
+	return 0
 }
 
 // resolveProjectPath expands a leading "~" and makes the path
@@ -638,6 +694,13 @@ func clampWizardCursor(w *wizardState, n int) int {
 		}
 	case stepWorktree, stepSandbox:
 		return 0
+	case stepWorktreeSetup:
+		if len(w.setupChoice) == 0 {
+			return 0
+		}
+		if n >= len(w.setupChoice) {
+			return len(w.setupChoice) - 1
+		}
 	}
 	if n < 0 {
 		return 0
@@ -649,7 +712,7 @@ func clampWizardCursor(w *wizardState, n int) int {
 func (m *Model) renderWizard() string {
 	w := m.wizard
 	var lines []string
-	title := wizardStepName(w.step)
+	title := wizardStepName(w.step, w.wantWorktree)
 	lines = append(lines, m.theme.Header.Render("New Session — "+title))
 	lines = append(lines, "")
 
@@ -770,9 +833,25 @@ func (m *Model) renderWizard() string {
 				m.theme.MutedText.Render("  will create: "+worktreeDest),
 			)
 		}
+		if w.wantWorktree {
+			lines = append(lines, "",
+				m.theme.MutedText.Render("[Enter] next → pick a setup recipe  [Shift+Tab] back  [Esc] cancel"),
+			)
+		} else {
+			lines = append(lines,
+				"",
+				m.theme.MutedText.Render("[Enter] create  [Shift+Tab] back  [Esc] cancel"),
+			)
+		}
+
+	case stepWorktreeSetup:
 		lines = append(lines,
+			m.theme.MutedText.Render("pick the setup recipe to apply to the new worktree"),
+			m.theme.MutedText.Render("(recipes declare which files to copy and which commands to run after checkout)"),
 			"",
-			m.theme.MutedText.Render("[Enter] next  [Shift+Tab] back  [Esc] cancel"),
+			m.renderSetupChoices(w.setupChoice, w.cursor),
+			"",
+			m.theme.MutedText.Render("[j/k] move  [Enter] select  [Shift+Tab] back  [Esc] cancel"),
 		)
 
 	case stepSandbox:
@@ -828,6 +907,25 @@ func (m *Model) renderWizard() string {
 	// does, so modal overlays visually sit in one consistent
 	// location regardless of terminal size.
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+}
+
+// renderSetupChoices renders the setup picker, styling the
+// "+ create new recipe" sentinel in muted text so it reads as an
+// action rather than a recipe entry.
+func (m *Model) renderSetupChoices(choices []setupChoice, cursor int) string {
+	var lines []string
+	for i, c := range choices {
+		marker := "  "
+		if i == cursor {
+			marker = m.theme.AttentionTag.Render("▶ ")
+		}
+		label := c.label()
+		if c.kind == choiceNewRecipe {
+			label = m.theme.MutedText.Render(label)
+		}
+		lines = append(lines, marker+label)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m *Model) renderChoices(choices []string, cursor int) string {
@@ -888,19 +986,28 @@ func (m *Model) renderPathCandidates(cands []string, limit int) string {
 	return strings.Join(lines, "\n")
 }
 
-// wizardStepName turns the enum into the modal title.
-func wizardStepName(s wizardStep) string {
+// wizardStepName turns the enum into the modal title. The total step
+// count depends on whether the user has toggled worktree creation on —
+// flipping the denominator keeps the displayed "(n/total)" consistent
+// across pages instead of mixing "(1/4)" with "(5/5)".
+func wizardStepName(s wizardStep, wantWorktree bool) string {
+	total := 5 // name + project + tool + worktree + sandbox
+	if wantWorktree {
+		total = 6 // + worktreeSetup
+	}
 	switch s {
 	case stepName:
-		return "Name (1/5)"
+		return fmt.Sprintf("Name (1/%d)", total)
 	case stepProject:
-		return "Project (2/5)"
+		return fmt.Sprintf("Project (2/%d)", total)
 	case stepTool:
-		return "Tool (3/5)"
+		return fmt.Sprintf("Tool (3/%d)", total)
 	case stepWorktree:
-		return "Worktree (4/5)"
+		return fmt.Sprintf("Worktree (4/%d)", total)
+	case stepWorktreeSetup:
+		return fmt.Sprintf("Setup recipe (5/%d)", total)
 	case stepSandbox:
-		return "Sandbox (5/5)"
+		return fmt.Sprintf("Sandbox (%d/%d)", total, total)
 	}
 	return ""
 }

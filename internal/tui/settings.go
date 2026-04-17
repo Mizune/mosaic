@@ -3,13 +3,12 @@ package tui
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
-	"github.com/BurntSushi/toml"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/Mizune/mosaic/internal/config/configwriter"
 	"github.com/Mizune/mosaic/internal/hook"
 	"github.com/Mizune/mosaic/internal/tui/theme"
 )
@@ -229,36 +228,32 @@ func (m *Model) applySettingValue(f settingsField, value string) {
 	}
 }
 
-// saveSettings writes the current config back to its global
-// TOML file. BurntSushi/toml re-encodes the whole struct so
-// comments in the existing file are lost — the trade-off for
-// round-trip fidelity vs. simplicity lands on "simple".
+// saveSettings writes the current config back to its global TOML
+// file, preserving everything the user did not edit.
+//
+// The settings screen only exposes fields in three top-level sections
+// ([mosaic], [ui], [discord]). saveSettings hands all three to
+// configwriter.UpsertSections in a single call, which reads the file
+// once, applies every splice to an in-memory buffer, and writes the
+// result atomically. That gives us all-or-nothing semantics: a
+// failure mid-way cannot leave the file with only a subset of the
+// edits applied. Unrelated sections — [tmux], [worktree],
+// [worktree.setup.*], [hooks], [[project]] — are preserved
+// byte-for-byte, including any comments the user wrote.
 func (m *Model) saveSettings() tea.Cmd {
 	path := m.configPaths.Global
 	if path == "" {
 		m.settingsError = "no config path configured"
 		return nil
 	}
+	cfg := m.config
 	return func() tea.Msg {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return settingsSaveResult{err: err.Error()}
+		sections := []configwriter.Section{
+			{TablePath: "mosaic", Value: cfg.Mosaic},
+			{TablePath: "ui", Value: cfg.UI},
+			{TablePath: "discord", Value: cfg.Discord},
 		}
-		tmp := path + ".tmp"
-		f, err := os.Create(tmp)
-		if err != nil {
-			return settingsSaveResult{err: err.Error()}
-		}
-		enc := toml.NewEncoder(f)
-		enc.Indent = "  "
-		if err := enc.Encode(m.config); err != nil {
-			_ = f.Close()
-			_ = os.Remove(tmp)
-			return settingsSaveResult{err: err.Error()}
-		}
-		if err := f.Close(); err != nil {
-			return settingsSaveResult{err: err.Error()}
-		}
-		if err := os.Rename(tmp, path); err != nil {
+		if err := configwriter.UpsertSections(path, sections); err != nil {
 			return settingsSaveResult{err: err.Error()}
 		}
 		return settingsSaveResult{success: true}

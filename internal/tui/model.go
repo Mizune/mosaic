@@ -72,6 +72,11 @@ const (
 	// a profile quits the TUI and cmd_root restarts the
 	// binary with --profile.
 	ScreenProfile
+	// ScreenRecipeWizard is the modal for building a new
+	// [worktree.setup.<name>] recipe and writing it to the
+	// project's .mosaic/config.toml. Payload lives in
+	// Model.recipeWizard.
+	ScreenRecipeWizard
 )
 
 // Model is the Bubble Tea state for the mosaic TUI.
@@ -129,6 +134,11 @@ type Model struct {
 
 	// Wizard state for the new-session modal.
 	wizard wizardState
+
+	// recipeWizard is the modal for building a new worktree setup
+	// recipe from inside the new-session wizard. See
+	// recipe_wizard.go.
+	recipeWizard recipeWizardState
 
 	// Confirmation overlay state. confirm.active is true while
 	// the screen is showing; pressing y runs confirm.onConfirm
@@ -654,6 +664,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.settingsError = v.err
 		}
 		return m, nil
+
+	case recipeSaveResultMsg:
+		return m.applyRecipeSaveResultMsg(v)
 	}
 	return m, nil
 }
@@ -693,6 +706,8 @@ func (m *Model) View() string {
 		return m.renderErrorLog()
 	case ScreenProfile:
 		return m.renderProfilePanel()
+	case ScreenRecipeWizard:
+		return renderRecipeWizard(&m.recipeWizard, m.theme, m.width, m.height)
 	default:
 		return m.renderTop()
 	}

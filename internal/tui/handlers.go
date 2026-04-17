@@ -100,6 +100,14 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.updateProfilePanel(msg)
 	}
+	// Recipe wizard: modal, routes to the recipe wizard handler
+	// which manages its own key grammar.
+	if m.screen == ScreenRecipeWizard {
+		if msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+		return m.updateRecipeWizardScreen(msg)
+	}
 
 	if matches(msg, m.keys.Quit) {
 		return m, tea.Quit
