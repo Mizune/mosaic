@@ -54,8 +54,18 @@ type NewSessionOptions struct {
 	WorkingDir string
 
 	// Command is the shell command to run in the first pane. Empty
-	// means "use the user's default shell".
+	// means "use the user's default shell". Ignored when Argv is
+	// non-nil.
 	Command string
+
+	// Argv, when non-empty, is passed as one trailing positional
+	// arg per element to `tmux new-session`, so tmux execs the
+	// binary directly without going through a shell. Use this for
+	// commands whose arguments contain spaces or shell
+	// metacharacters (e.g. a `docker run ...` invocation with
+	// volume bind specs). When Argv is set it takes precedence
+	// over Command.
+	Argv []string
 
 	// Width and Height set the initial window dimensions. Zero values
 	// fall back to tmux defaults.
@@ -154,7 +164,13 @@ func (c *CLI) NewSession(ctx context.Context, opts NewSessionOptions) error {
 			args = append(args, "-e", k+"="+opts.Env[k])
 		}
 	}
-	if opts.Command != "" {
+	// Argv wins over Command so callers passing a pre-built argv
+	// (e.g. the sandbox wrapper emitting `docker run ...`) do not
+	// have to shell-quote their pieces. tmux treats the trailing
+	// positional args as the command to exec.
+	if len(opts.Argv) > 0 {
+		args = append(args, opts.Argv...)
+	} else if opts.Command != "" {
 		args = append(args, opts.Command)
 	}
 	if _, err := c.run(ctx, args...); err != nil {

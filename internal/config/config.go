@@ -22,6 +22,13 @@ type Config struct {
 	Worktree WorktreeSection `toml:"worktree"`
 	Hooks    HooksSection    `toml:"hooks"`
 
+	// Docker holds the [docker] table that defines defaults for
+	// Docker-backed session sandboxes. The block only defines
+	// defaults — sandboxing is never enabled by the presence of
+	// this block alone. Users opt in per-session via the wizard,
+	// the --sandbox CLI flag, or the per-project `sandbox` field.
+	Docker DockerSection `toml:"docker"`
+
 	// Discord holds the [discord] table that controls the optional
 	// Discord bridge. When Enabled is true and a bot token is
 	// available, mosaic opens a WebSocket to Discord and streams
@@ -66,6 +73,14 @@ type ProjectEntry struct {
 	// DefaultBranch overrides [worktree] default_base_branch for
 	// this project.
 	DefaultBranch string `toml:"default_branch"`
+
+	// Sandbox selects the isolation mode for sessions launched in
+	// this project. Accepted values: "none" (default, agent runs
+	// on the host) and "docker" (agent runs inside a Docker
+	// container built from [docker] defaults). An unknown or empty
+	// value behaves like "none" so a typo never silently enables
+	// sandboxing.
+	Sandbox string `toml:"sandbox"`
 }
 
 // MosaicSection holds the [mosaic] table.
@@ -234,6 +249,73 @@ type HooksSection struct {
 	Events []string `toml:"events"`
 }
 
+// DockerSection holds the [docker] table that configures the Docker
+// session sandbox. Field names deliberately mirror agent-deck's
+// config keys so users migrating from agent-deck get a familiar
+// surface.
+//
+// Sandboxing is never auto-enabled by the mere presence of this
+// table. The fields below define defaults that take effect only
+// when the user asks for a Docker-backed session (via `mosaic new
+// --sandbox=docker`, the wizard, or `sandbox = "docker"` on a
+// [[project]] entry).
+type DockerSection struct {
+	// Image is the reference (`repo:tag` or `repo@digest`) passed
+	// to `docker run`. Users are expected to supply this — mosaic
+	// ships a reference Dockerfile under docker/sandbox/ but does
+	// not auto-pull from a registry.
+	Image string `toml:"image"`
+
+	// ExtraArgs is a free-form list of flags appended to the
+	// `docker run` command after the standard `-v` / `-e` set and
+	// before the image reference. Good fit for resource limits
+	// (`--cpus=2`, `--memory=4g`) or `--network=…`.
+	ExtraArgs []string `toml:"extra_args"`
+
+	// DefaultMounts is a list of user-defined bind mounts, one
+	// string per mount using the docker `host:container[:ro]`
+	// syntax. They are appended after the auth mounts (MountClaude
+	// / MountGh / MountSSH). Host paths that do not exist at
+	// launch time are silently dropped so a mount missing on one
+	// developer's machine does not break everyone else's.
+	DefaultMounts []string `toml:"default_mounts"`
+
+	// MountClaude bind-mounts ~/.claude into the container
+	// read-only so Claude Code's authentication tokens flow
+	// through without re-login. Defaults to true.
+	//
+	// Nullable (*bool) so TOML can distinguish "key absent"
+	// (inherit the default) from "explicit false" (opt out).
+	// Read via [BoolOr] so call sites carry the default next
+	// to the consumption site.
+	MountClaude *bool `toml:"mount_claude"`
+
+	// MountGh bind-mounts ~/.config/gh read-only so `gh` and
+	// session hooks that shell out to gh (PR creation, etc.) work
+	// without a fresh `gh auth login`. Defaults to true.
+	MountGh *bool `toml:"mount_gh"`
+
+	// MountSSH bind-mounts ~/.ssh read-only so the agent can push
+	// to git remotes that require key auth. Defaults to true.
+	MountSSH *bool `toml:"mount_ssh"`
+
+	// AutoCleanup controls whether the service issues a best-
+	// effort `docker rm -f mosaic-<id>` when a session stops or
+	// is deleted. The container is also launched with `--rm`, so
+	// AutoCleanup matters mostly when the container is wedged or
+	// tmux hands back control before the agent exits. Defaults
+	// to true.
+	AutoCleanup *bool `toml:"auto_cleanup"`
+
+	// FirewallAllowlist is forwarded to the reference image's
+	// init-firewall.sh via the MOSAIC_FW_ALLOWLIST env var as a
+	// comma-separated list. Hosts (or CIDRs) on the list are the
+	// only outbound destinations the container can reach; every
+	// other connection is dropped. The list augments the small
+	// built-in set hardcoded in the init script.
+	FirewallAllowlist []string `toml:"firewall_allowlist"`
+}
+
 // DiscordSection holds the [discord] table. The bridge is disabled by
 // default; users opt in by setting enabled = true and providing a bot
 // token (preferably via the MOSAIC_DISCORD_TOKEN env var).
@@ -314,6 +396,18 @@ func Default() Config {
 				"SessionEnd",
 				"Notification",
 			},
+		},
+		Docker: DockerSection{
+			// Sensible secure-by-default auth passthrough so
+			// opting into Docker mode does not also require
+			// re-authenticating every tool inside the container.
+			// Stored as *bool with an explicit true so a project
+			// override can set e.g. mount_ssh = false to opt out
+			// without also having to pin every other field.
+			MountClaude: BoolPtr(true),
+			MountGh:     BoolPtr(true),
+			MountSSH:    BoolPtr(true),
+			AutoCleanup: BoolPtr(true),
 		},
 	}
 }

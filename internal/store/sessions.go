@@ -34,6 +34,12 @@ const (
 	ToolShell  SessionTool = "shell"
 )
 
+// defaultSandboxMode is the value stored in sessions.sandbox_mode
+// when the caller does not supply one. It mirrors the canonical
+// "none" token from internal/sandbox but is kept as a plain string
+// so the store layer does not import higher-level packages.
+const defaultSandboxMode = "none"
+
 // AttentionState classifies whether the user needs to act on a
 // session: none, waiting for input, or in an error state.
 type AttentionState string
@@ -63,16 +69,43 @@ type Session struct {
 	AttentionBody   sql.NullString `db:"attention_body"`
 	AttentionSince  sql.NullTime   `db:"attention_since"`
 	AttentionSource sql.NullString `db:"attention_source"`
+
+	// SandboxMode records the isolation backend the session was
+	// launched with: "none" (direct host execution) or "docker".
+	// Persisted so Stop/Delete can issue `docker rm -f` without
+	// having to re-derive the mode from config on the reattach
+	// path (where that config may have changed).
+	SandboxMode string `db:"sandbox_mode"`
+
+	// SandboxContainer is the deterministic container name
+	// (mosaic-<id>) for docker-backed sessions. Empty when
+	// SandboxMode != "docker". Stored verbatim so cleanup code
+	// does not depend on how the name was computed.
+	SandboxContainer string `db:"sandbox_container"`
 }
 
 // NewSession is the input shape for [SessionsRepo.Insert]. Required
 // fields are validated; optional fields default sensibly.
 type NewSession struct {
+	// ID, when non-empty, is used verbatim as the session's
+	// ULID instead of minting one in Insert. The only caller
+	// that pre-generates is SessionService.Create, which needs
+	// the ID to derive the sandbox container name before the
+	// row exists. All other callers leave this empty.
+	ID           string
 	Name         string
 	ProjectPath  string
 	WorktreePath string
 	Branch       string
 	Tool         SessionTool
+
+	// SandboxMode records which isolation backend the session
+	// uses. Defaults to "none" when empty.
+	SandboxMode string
+
+	// SandboxContainer is the container name for docker sessions.
+	// Empty when SandboxMode != "docker".
+	SandboxContainer string
 }
 
 // sessionColumns is the explicit column list for SELECT queries on the
@@ -84,6 +117,7 @@ var sessionColumns = strings.Join([]string{
 	"tmux_session", "tool", "status", "claude_session_id", "conductor_id",
 	"created_at", "last_active_at", "attention_state", "attention_title",
 	"attention_body", "attention_since", "attention_source",
+	"sandbox_mode", "sandbox_container",
 }, ", ")
 
 // SessionsRepo is the typed accessor for the sessions table.
@@ -116,33 +150,46 @@ func (r *SessionsRepo) Insert(ctx context.Context, in NewSession) (Session, erro
 		in.Tool = ToolClaude
 	}
 
-	id, err := newULID()
-	if err != nil {
-		return Session{}, fmt.Errorf("generate id: %w", err)
+	id := in.ID
+	if id == "" {
+		generated, err := newULID()
+		if err != nil {
+			return Session{}, fmt.Errorf("generate id: %w", err)
+		}
+		id = generated
+	}
+
+	sandboxMode := in.SandboxMode
+	if sandboxMode == "" {
+		sandboxMode = defaultSandboxMode
 	}
 
 	sess := Session{
-		ID:           id,
-		Name:         in.Name,
-		ProjectPath:  in.ProjectPath,
-		WorktreePath: in.WorktreePath,
-		Branch:       sql.NullString{String: in.Branch, Valid: in.Branch != ""},
-		TmuxSession:  "mos_" + id,
-		Tool:         string(in.Tool),
-		Status:       string(StatusIdle),
-		CreatedAt:    time.Now().UTC(),
-		LastActiveAt: time.Now().UTC(),
+		ID:               id,
+		Name:             in.Name,
+		ProjectPath:      in.ProjectPath,
+		WorktreePath:     in.WorktreePath,
+		Branch:           sql.NullString{String: in.Branch, Valid: in.Branch != ""},
+		TmuxSession:      "mos_" + id,
+		Tool:             string(in.Tool),
+		Status:           string(StatusIdle),
+		CreatedAt:        time.Now().UTC(),
+		LastActiveAt:     time.Now().UTC(),
+		SandboxMode:      sandboxMode,
+		SandboxContainer: in.SandboxContainer,
 	}
 
-	_, err = r.db.NamedExecContext(ctx, `
+	_, err := r.db.NamedExecContext(ctx, `
         INSERT INTO sessions (
             id, name, project_path, worktree_path, branch,
             tmux_session, tool, status,
-            created_at, last_active_at
+            created_at, last_active_at,
+            sandbox_mode, sandbox_container
         ) VALUES (
             :id, :name, :project_path, :worktree_path, :branch,
             :tmux_session, :tool, :status,
-            :created_at, :last_active_at
+            :created_at, :last_active_at,
+            :sandbox_mode, :sandbox_container
         )`, sess)
 	if err != nil {
 		return Session{}, fmt.Errorf("insert session: %w", err)
@@ -253,4 +300,14 @@ func newULID() (string, error) {
 		return "", err
 	}
 	return id.String(), nil
+}
+
+// NewSessionID mints a fresh session ULID without touching the
+// database. It is the public entry point for callers that need
+// the ID before calling [SessionsRepo.Insert] (typically so they
+// can derive related identifiers — the sandbox container name,
+// for example — and pass them in via [NewSession] instead of
+// letting Insert synthesise them).
+func NewSessionID() (string, error) {
+	return newULID()
 }

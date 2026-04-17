@@ -20,6 +20,7 @@ import (
 	"github.com/Mizune/mosaic/internal/bus"
 	"github.com/Mizune/mosaic/internal/config"
 	"github.com/Mizune/mosaic/internal/git"
+	"github.com/Mizune/mosaic/internal/sandbox"
 	"github.com/Mizune/mosaic/internal/store"
 	"github.com/Mizune/mosaic/internal/tmux"
 	"github.com/Mizune/mosaic/internal/worktree"
@@ -35,27 +36,41 @@ type SessionService struct {
 	worktree *worktree.Manager
 	git      *git.Client
 
-	// HookSocketPath is the unix socket path the hook server listens
-	// on. When non-empty, the service exports MOSAIC_SOCKET_PATH (and
-	// the per-session MOSAIC_WORKTREE_ID / MOSAIC_TAB_ID /
-	// MOSAIC_SURFACE_ID companions) into every tmux session it
-	// creates, so installed Claude Code hooks can report back into
-	// mosaic via `nc -U`.
-	//
-	// Left empty in CLI-only commands where no hook server is
-	// running; in that case the hooks themselves are no-ops because
-	// of their env-presence guard.
+	// Cfg groups the forwarded configuration fields that
+	// openRuntime copies from the merged config at startup.
+	// Kept in a dedicated struct so the service's construction
+	// dependencies (store/tmux/bus/worktree) stay separate from
+	// its runtime-configuration surface.
+	Cfg SessionServiceConfig
+}
+
+// SessionServiceConfig groups the config-derived fields that
+// [openRuntime] forwards into the session service. Collecting them
+// in one struct clarifies the service's configuration surface and
+// prevents the field list from growing unboundedly on the service
+// itself.
+type SessionServiceConfig struct {
+	// HookSocketPath is the unix socket path the hook server
+	// listens on. When non-empty, every tmux session mosaic
+	// creates exports MOSAIC_SOCKET_PATH into the agent's env.
+	// Left empty in CLI-only commands where no hook server runs.
 	HookSocketPath string
 
 	// DiffBaseBranch is the fallback ref the Diff helpers compare
-	// against when a session row has no explicit base. "main" is
-	// the typical default; callers can override via config.
+	// against when a session row has no explicit base.
 	DiffBaseBranch string
 
-	// ToolFlags carries per-tool launch flag overrides from
-	// the user's config.toml. Empty / missing entries fall
-	// through to the CLI defaults.
+	// ToolFlags carries per-tool launch flag overrides from the
+	// user's config.toml.
 	ToolFlags map[string]config.ToolLaunchFlags
+
+	// Docker carries the resolved [docker] defaults for sandbox
+	// spec resolution.
+	Docker config.DockerSection
+
+	// Projects is the registered project list used for per-project
+	// sandbox opt-in resolution.
+	Projects []config.ProjectEntry
 }
 
 // NewSessionService constructs a session service. Pass nil for the
@@ -66,12 +81,12 @@ type SessionService struct {
 // after construction.
 func NewSessionService(s *store.Store, t tmux.Backend, b *bus.Bus, w *worktree.Manager) *SessionService {
 	return &SessionService{
-		store:          s,
-		tmux:           t,
-		bus:            b,
-		worktree:       w,
-		git:            git.New(),
-		DiffBaseBranch: "main",
+		store:    s,
+		tmux:     t,
+		bus:      b,
+		worktree: w,
+		git:      git.New(),
+		Cfg:      SessionServiceConfig{DiffBaseBranch: "main"},
 	}
 }
 
@@ -115,6 +130,23 @@ type CreateInput struct {
 
 	// WorktreeSetup is the recipe to apply to the new worktree.
 	WorktreeSetup config.WorktreeSetup
+
+	// SandboxMode selects the isolation backend for this session.
+	// When empty, the resolver falls back to the per-project
+	// `sandbox` field and ultimately to "none". Explicitly
+	// passing sandbox.ModeNone forces host execution even when
+	// the project opts into docker.
+	SandboxMode sandbox.Mode
+
+	// SandboxImage overrides the [docker] default image for this
+	// session only. Ignored when SandboxMode != ModeDocker.
+	//
+	// Like ForceContinue, this override is applied to the initial
+	// Create only and is NOT persisted on the session row. Respawn
+	// re-resolves the image from current config, so a per-session
+	// override does not survive a respawn — edit [docker].image in
+	// config.toml if you need the override to stick.
+	SandboxImage string
 }
 
 // Create inserts a session row, optionally creates a worktree, spawns
@@ -169,48 +201,54 @@ func (s *SessionService) Create(ctx context.Context, in CreateInput) (store.Sess
 		worktreeCreated = true
 	}
 
-	row, err := s.store.Sessions().Insert(ctx, store.NewSession{
-		Name:         in.Name,
-		ProjectPath:  in.ProjectPath,
-		WorktreePath: in.WorktreePath,
-		Branch:       in.Branch,
-		Tool:         in.Tool,
-	})
-	if err != nil {
+	// rollbackWT undoes the worktree side-effect on any early
+	// return. Capturing the decision once avoids repeating the
+	// four-line guard on every error path.
+	rollbackWT := func() {
 		if worktreeCreated && s.worktree != nil {
 			_ = s.worktree.Remove(ctx, worktreeRepo, in.WorktreePath, true)
 		}
+	}
+
+	spec, err := s.resolveSandboxSpec(in)
+	if err != nil {
+		rollbackWT()
 		return store.Session{}, err
 	}
 
-	// Pick the command that actually starts the requested agent.
-	// An explicit in.Command (from --cmd or a conductor dispatch)
-	// always wins; otherwise we ask the tool registry what the
-	// launcher for this tool is. `shell` → empty string → tmux
-	// uses the user's default shell. The worktree-aware variant
-	// is used so Claude Code auto-adds `--continue` when a prior
-	// transcript for this worktree exists — imported sessions and
-	// "came back after /exit" sessions both resume naturally.
-	launchCmd := in.Command
-	if launchCmd == "" {
-		flags := s.flagsFor(in.Tool)
-		// Per-session override: if the user explicitly asked
-		// for --continue (CLI flag or TUI toggle), treat this
-		// Create call like a respawn so the transcript resumes.
-		forceResume := in.ForceContinue
-		launchCmd = LaunchCommandForSession(in.Tool, in.WorktreePath, flags, forceResume)
+	// Pre-generate the ULID so the sandbox container name can be
+	// derived before the row is persisted.
+	id, err := store.NewSessionID()
+	if err != nil {
+		rollbackWT()
+		return store.Session{}, fmt.Errorf("generate session id: %w", err)
+	}
+	containerName := ""
+	if spec.Mode == sandbox.ModeDocker {
+		containerName = sandbox.ContainerName(id)
 	}
 
-	if err := s.tmux.NewSession(ctx, tmux.NewSessionOptions{
-		Name:       row.TmuxSession,
-		WorkingDir: row.WorktreePath,
-		Command:    launchCmd,
-		Env:        s.hookEnv(row),
-	}); err != nil {
+	row, err := s.store.Sessions().Insert(ctx, store.NewSession{
+		ID:               id,
+		Name:             in.Name,
+		ProjectPath:      in.ProjectPath,
+		WorktreePath:     in.WorktreePath,
+		Branch:           in.Branch,
+		Tool:             in.Tool,
+		SandboxMode:      spec.Mode.String(),
+		SandboxContainer: containerName,
+	})
+	if err != nil {
+		rollbackWT()
+		return store.Session{}, err
+	}
+
+	launchCommand, launchArgv := s.resolveLaunchCommand(in)
+	tmuxOpts := s.buildLaunchTmuxOpts(row, spec, launchCommand, launchArgv)
+
+	if err := s.tmux.NewSession(ctx, tmuxOpts); err != nil {
 		_ = s.store.Sessions().Delete(ctx, row.ID)
-		if worktreeCreated && s.worktree != nil {
-			_ = s.worktree.Remove(ctx, worktreeRepo, in.WorktreePath, true)
-		}
+		rollbackWT()
 		return store.Session{}, fmt.Errorf("tmux create: %w", err)
 	}
 
@@ -235,6 +273,60 @@ func (s *SessionService) Create(ctx context.Context, in CreateInput) (store.Sess
 	return row, nil
 }
 
+// resolveLaunchCommand returns the verbatim command string and its
+// tokenised argv. The caller passes both to buildLaunchTmuxOpts so
+// the sandbox-wrapping / tmux-spawning code does not have to know
+// which source (user --cmd override vs tool launcher) produced
+// the command.
+func (s *SessionService) resolveLaunchCommand(in CreateInput) (command string, argv []string) {
+	if in.Command != "" {
+		return in.Command, splitCommandString(in.Command)
+	}
+	flags := s.flagsFor(in.Tool)
+	argv = LaunchArgvForSession(in.Tool, in.WorktreePath, flags, in.ForceContinue)
+	return "", argv
+}
+
+// buildLaunchTmuxOpts assembles the [tmux.NewSessionOptions] used
+// to spawn a session's first pane. It is the single source of
+// truth shared by Create and doRespawn so the sandbox-wrap /
+// argv-vs-command decision cannot drift between the two paths.
+func (s *SessionService) buildLaunchTmuxOpts(
+	row store.Session,
+	spec sandbox.Spec,
+	launchCommand string,
+	launchArgv []string,
+) tmux.NewSessionOptions {
+	env := s.hookEnv(row)
+	opts := tmux.NewSessionOptions{
+		Name:       row.TmuxSession,
+		WorkingDir: row.WorktreePath,
+		Env:        env,
+	}
+
+	// Docker mode: each token is a separate argv element so tmux
+	// execs without a shell.
+	if spec.Mode == sandbox.ModeDocker {
+		opts.Argv = sandbox.Wrap(spec, sandbox.Input{
+			SessionID:  row.ID,
+			WorkingDir: row.WorktreePath,
+			Env:        env,
+			Argv:       launchArgv,
+		})
+		return opts
+	}
+
+	// Host mode: preserve the user-supplied string byte-for-byte
+	// when available, fall back to whitespace-joining the
+	// synthesised argv.
+	if launchCommand != "" {
+		opts.Command = launchCommand
+	} else if len(launchArgv) > 0 {
+		opts.Command = joinArgv(launchArgv)
+	}
+	return opts
+}
+
 // injectInitialPrompt waits long enough for the tool's welcome
 // screen to render, then types the prompt into the session's
 // active pane and presses Enter. Errors are swallowed — a
@@ -255,6 +347,13 @@ func (s *SessionService) injectInitialPrompt(tmuxSession, prompt string) {
 }
 
 // Kill removes the tmux session and deletes its database row.
+//
+// When the session was launched in docker mode and the docker
+// config has auto_cleanup=true, Kill also issues a best-effort
+// `docker rm -f` so a wedged container (one that survived the
+// initial `--rm` because the agent did not exit cleanly) is
+// not left lying around. Errors are swallowed because the
+// cleanup is a hint, not a correctness boundary.
 func (s *SessionService) Kill(ctx context.Context, name string) error {
 	row, err := s.store.Sessions().GetByName(ctx, name)
 	if err != nil {
@@ -262,6 +361,9 @@ func (s *SessionService) Kill(ctx context.Context, name string) error {
 	}
 	if err := s.tmux.Kill(ctx, row.TmuxSession); err != nil {
 		return fmt.Errorf("tmux kill: %w", err)
+	}
+	if row.SandboxMode == sandbox.ModeDocker.String() && config.BoolOr(s.Cfg.Docker.AutoCleanup, true) {
+		removeSandboxContainer(row.SandboxContainer)
 	}
 	if err := s.store.Sessions().Delete(ctx, row.ID); err != nil {
 		return err
@@ -308,13 +410,44 @@ func (s *SessionService) doRespawn(ctx context.Context, row store.Session) error
 
 	tool := store.SessionTool(row.Tool)
 	const respawn = true
-	launchCmd := LaunchCommandForSession(tool, row.WorktreePath, s.flagsFor(tool), respawn)
-	if err := s.tmux.NewSession(ctx, tmux.NewSessionOptions{
-		Name:       row.TmuxSession,
-		WorkingDir: row.WorktreePath,
-		Command:    launchCmd,
-		Env:        s.hookEnv(row),
-	}); err != nil {
+	launchArgv := LaunchArgvForSession(tool, row.WorktreePath, s.flagsFor(tool), respawn)
+
+	// Respawn reuses whatever sandbox mode the row was originally
+	// created with so the user's "pick up where I left off"
+	// intent includes the isolation they opted into. We
+	// re-resolve the spec from current config (image, mounts,
+	// extra args) so config edits since the first launch take
+	// effect on the respawn.
+	spec := sandbox.Spec{Mode: sandbox.ModeNone}
+	if row.SandboxMode == sandbox.ModeDocker.String() {
+		resolved, err := s.resolveSandboxSpec(CreateInput{
+			SandboxMode: sandbox.ModeDocker,
+			ProjectPath: row.ProjectPath,
+		})
+		if err != nil {
+			return fmt.Errorf("respawn: resolve sandbox: %w", err)
+		}
+		spec = resolved
+	}
+
+	// Respawn has no user-supplied Command string — the launcher
+	// always comes from LaunchArgvForSession, so launchCommand
+	// is empty and the helper falls through to the argv-join
+	// path for the non-docker case.
+	tmuxOpts := s.buildLaunchTmuxOpts(row, spec, "", launchArgv)
+
+	// Container names are deterministic (`mosaic-<id>`). If the
+	// previous incarnation died without cleanup — e.g. tmux was
+	// killed while the container was still running, so `docker
+	// run --rm` never fired — the next `docker run` will fail
+	// with a name conflict. Issue a best-effort `docker rm -f`
+	// before spawning so respawn is self-healing, mirroring what
+	// Kill does on the teardown side.
+	if spec.Mode == sandbox.ModeDocker {
+		removeSandboxContainer(row.SandboxContainer)
+	}
+
+	if err := s.tmux.NewSession(ctx, tmuxOpts); err != nil {
 		return fmt.Errorf("respawn tmux session %q in %s: %w",
 			row.TmuxSession, row.WorktreePath, err)
 	}
@@ -434,10 +567,10 @@ func (s *SessionService) GetByName(ctx context.Context, name string) (store.Sess
 // tool, or the zero value (no extra flags) when the user has
 // not added a [mosaic.tools.<tool>] section to their config.
 func (s *SessionService) flagsFor(tool store.SessionTool) config.ToolLaunchFlags {
-	if s.ToolFlags == nil {
+	if s.Cfg.ToolFlags == nil {
 		return config.ToolLaunchFlags{}
 	}
-	if f, ok := s.ToolFlags[string(tool)]; ok {
+	if f, ok := s.Cfg.ToolFlags[string(tool)]; ok {
 		return f
 	}
 	return config.ToolLaunchFlags{}
@@ -456,11 +589,11 @@ func (s *SessionService) flagsFor(tool store.SessionTool) config.ToolLaunchFlags
 // When HookSocketPath is empty the function returns nil: there is no
 // socket to report to, so there is no point polluting the tmux env.
 func (s *SessionService) hookEnv(row store.Session) map[string]string {
-	if s.HookSocketPath == "" {
+	if s.Cfg.HookSocketPath == "" {
 		return nil
 	}
 	return map[string]string{
-		"MOSAIC_SOCKET_PATH": s.HookSocketPath,
+		"MOSAIC_SOCKET_PATH": s.Cfg.HookSocketPath,
 		"MOSAIC_WORKTREE_ID": row.ID,
 		"MOSAIC_TAB_ID":      row.ID,
 		"MOSAIC_SURFACE_ID":  "tmux",
@@ -490,7 +623,7 @@ func (s *SessionService) Diff(ctx context.Context, name string) (DiffResult, err
 	if err != nil {
 		return DiffResult{}, err
 	}
-	base := s.DiffBaseBranch
+	base := s.Cfg.DiffBaseBranch
 	if base == "" {
 		base = "main"
 	}
@@ -515,7 +648,7 @@ func (s *SessionService) DiffFile(ctx context.Context, name, path string, untrac
 	if err != nil {
 		return "", err
 	}
-	base := s.DiffBaseBranch
+	base := s.Cfg.DiffBaseBranch
 	if base == "" {
 		base = "main"
 	}
