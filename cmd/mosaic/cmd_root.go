@@ -130,5 +130,6 @@ detection, declarative worktree setup, and a built-in conductor.`,
 	root.AddCommand(newDiscordCmd())
 	root.AddCommand(newResumeCmd())
 	root.AddCommand(newUpdateCmd())
+	root.AddCommand(newWorktreeCmd())
 	return root
 }
