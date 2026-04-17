@@ -132,16 +132,15 @@ func openRuntime(ctx context.Context, opts runtimeOptions) (*runtime, error) {
 	wt := worktree.NewManager(git.New())
 
 	sessionSvc := service.NewSessionService(st, tmuxBackend, b, wt)
-	// Use the project's default base branch as the Diff View
-	// comparison ref. It falls back to "main" when unset.
+	// Forward config-derived fields into the service's Cfg struct.
 	if base := res.Config.Worktree.DefaultBaseBranch; base != "" {
-		sessionSvc.DiffBaseBranch = base
+		sessionSvc.Cfg.DiffBaseBranch = base
 	}
-	// Per-tool launch flag overrides from the user's config
-	// (e.g. claude bypass_permissions / auto_mode).
 	if len(res.Config.Mosaic.Tools) > 0 {
-		sessionSvc.ToolFlags = res.Config.Mosaic.Tools
+		sessionSvc.Cfg.ToolFlags = res.Config.Mosaic.Tools
 	}
+	sessionSvc.Cfg.Docker = res.Config.Docker
+	sessionSvc.Cfg.Projects = res.Config.Projects
 	rt := &runtime{
 		paths:     paths,
 		config:    res.Config,
@@ -192,7 +191,7 @@ func (r *runtime) startLive(ctx context.Context, home string) error {
 		// MOSAIC_SOCKET_PATH and short-circuit to true via their env
 		// guard — which is the "hooks installed but silent" bug we
 		// hit without this step.
-		r.sessions.HookSocketPath = socketPath
+		r.sessions.Cfg.HookSocketPath = socketPath
 	}
 
 	var recOpts []live.Option
