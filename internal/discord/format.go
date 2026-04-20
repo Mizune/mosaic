@@ -32,6 +32,23 @@ const (
 // press Enter without preceding text input.
 const enterKey = ""
 
+// discordSubagentLabel builds a label for a sub-agent, combining
+// type and description when both are available.
+// Format: "[Explore] search for auth patterns" (bracket notation).
+// See also subagentLabel in internal/tui/views.go which uses
+// colon-separated notation instead.
+func discordSubagentLabel(sub store.Subagent) string {
+	hasType, typ, desc := sub.LabelParts()
+	switch {
+	case hasType && desc != "":
+		return "[" + typ + "] " + desc
+	case desc != "":
+		return desc
+	default:
+		return typ
+	}
+}
+
 // statusEmoji maps a session status string to a Discord-friendly emoji.
 func statusEmoji(status string) string {
 	switch store.SessionStatus(status) {
@@ -115,10 +132,7 @@ func formatSessionDetail(s store.Session, subs []store.Subagent) *discordgo.Mess
 		var subLines []string
 		for _, sub := range subs {
 			emoji := statusEmoji(sub.Status)
-			desc := sub.SubagentType
-			if sub.Description.Valid && sub.Description.String != "" {
-				desc = sub.Description.String
-			}
+			desc := discordSubagentLabel(sub)
 			tool := ""
 			if sub.CurrentTool.Valid && sub.CurrentTool.String != "" {
 				tool = fmt.Sprintf(" — %s", sub.CurrentTool.String)
