@@ -195,10 +195,8 @@ func TestReconciler_TranscriptEntryUpdatesSubagentTool(t *testing.T) {
 	}
 	// Bind the parent to a Claude session id so the reconciler can
 	// route the events.
-	if _, err := st.DB().ExecContext(ctx,
-		`UPDATE sessions SET claude_session_id = ? WHERE id = ?`,
-		"claude-sess", parent.ID); err != nil {
-		t.Fatalf("bind: %v", err)
+	if err := st.Sessions().BindClaudeSession(ctx, parent.ID, "claude-sess"); err != nil {
+		t.Fatalf("bind claude session id: %v", err)
 	}
 
 	b := bus.New()
@@ -249,10 +247,8 @@ func TestReconciler_ParentStatusRunningAndIdleRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
-	if _, err := st.DB().ExecContext(ctx,
-		`UPDATE sessions SET claude_session_id = ? WHERE id = ?`,
-		"claude-sess", parent.ID); err != nil {
-		t.Fatalf("bind: %v", err)
+	if err := st.Sessions().BindClaudeSession(ctx, parent.ID, "claude-sess"); err != nil {
+		t.Fatalf("bind claude session id: %v", err)
 	}
 
 	b := bus.New()
@@ -382,10 +378,8 @@ func TestReconciler_ForegroundAgentToolResultMarksCompleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
-	if _, err := st.DB().ExecContext(ctx,
-		`UPDATE sessions SET claude_session_id = ? WHERE id = ?`,
-		"claude-sess", parent.ID); err != nil {
-		t.Fatalf("bind: %v", err)
+	if err := st.Sessions().BindClaudeSession(ctx, parent.ID, "claude-sess"); err != nil {
+		t.Fatalf("bind claude session id: %v", err)
 	}
 
 	b := bus.New()
@@ -443,10 +437,8 @@ func TestReconciler_ForegroundAgentErrorMarksErrored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
-	if _, err := st.DB().ExecContext(ctx,
-		`UPDATE sessions SET claude_session_id = ? WHERE id = ?`,
-		"claude-sess", parent.ID); err != nil {
-		t.Fatalf("bind: %v", err)
+	if err := st.Sessions().BindClaudeSession(ctx, parent.ID, "claude-sess"); err != nil {
+		t.Fatalf("bind claude session id: %v", err)
 	}
 
 	b := bus.New()
@@ -480,4 +472,160 @@ func TestReconciler_ForegroundAgentErrorMarksErrored(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("timed out waiting for sub-agent to be marked errored")
+}
+
+// Test that speculative metadata matching applies the correct
+// subagent_type and description from a pending Agent tool_use to
+// the sub-agent row BEFORE the tool_result arrives.
+func TestReconciler_SpeculativeMetadata(t *testing.T) {
+	env := setupReconciler(t)
+
+	// 1. Parent publishes Agent tool_use (metadata is now pending).
+	agentInput := `{"description":"search for auth patterns","subagent_type":"Explore","prompt":"find auth","run_in_background":false}`
+	env.Bus.Publish(claudeio.TranscriptEntry{
+		ProjectPath: "/tmp/p",
+		SessionID:   "claude-sess",
+		Entry:       buildAgentToolUseEntry("tu1", agentInput),
+	})
+
+	time.Sleep(50 * time.Millisecond)
+
+	// 2. Sub-agent spawns (BEFORE tool_result arrives).
+	env.Bus.Publish(claudeio.SubagentSpawned{
+		ProjectPath: "/tmp/p",
+		SessionID:   "claude-sess",
+		AgentID:     "abc123",
+	})
+
+	// 3. Assert: sub-agent row has the speculative metadata.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		sub, err := env.Store.Subagents().GetByAgentID(env.Ctx, env.Parent.ID, "abc123")
+		if err == nil && sub.SubagentType == "Explore" {
+			if !sub.Description.Valid || sub.Description.String != "search for auth patterns" {
+				t.Fatalf("description = %q, want %q",
+					sub.Description.String, "search for auth patterns")
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for speculative metadata on sub-agent row")
+}
+
+// Test that speculative matching assigns the correct metadata to
+// multiple sub-agents spawned in order from multiple Agent tool_use
+// blocks.
+func TestReconciler_SpeculativeMetadata_MultipleAgents(t *testing.T) {
+	env := setupReconciler(t)
+
+	// 1. Two Agent tool_use blocks in order.
+	env.Bus.Publish(claudeio.TranscriptEntry{
+		ProjectPath: "/tmp/p",
+		SessionID:   "claude-sess",
+		Entry: buildAgentToolUseEntry("tu1",
+			`{"description":"explore frontend","subagent_type":"Explore","prompt":"look","run_in_background":false}`),
+	})
+	env.Bus.Publish(claudeio.TranscriptEntry{
+		ProjectPath: "/tmp/p",
+		SessionID:   "claude-sess",
+		Entry: buildAgentToolUseEntry("tu2",
+			`{"description":"review code","subagent_type":"code-reviewer","prompt":"review","run_in_background":false}`),
+	})
+
+	time.Sleep(50 * time.Millisecond)
+
+	// 2. Two SubagentSpawned events in order.
+	env.Bus.Publish(claudeio.SubagentSpawned{
+		ProjectPath: "/tmp/p",
+		SessionID:   "claude-sess",
+		AgentID:     "agent1",
+	})
+	time.Sleep(50 * time.Millisecond)
+	env.Bus.Publish(claudeio.SubagentSpawned{
+		ProjectPath: "/tmp/p",
+		SessionID:   "claude-sess",
+		AgentID:     "agent2",
+	})
+
+	// 3. Assert: first agent = Explore, second = code-reviewer.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		s1, e1 := env.Store.Subagents().GetByAgentID(env.Ctx, env.Parent.ID, "agent1")
+		s2, e2 := env.Store.Subagents().GetByAgentID(env.Ctx, env.Parent.ID, "agent2")
+		if e1 == nil && e2 == nil &&
+			s1.SubagentType == "Explore" &&
+			s2.SubagentType == "code-reviewer" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	s1, _ := env.Store.Subagents().GetByAgentID(env.Ctx, env.Parent.ID, "agent1")
+	s2, _ := env.Store.Subagents().GetByAgentID(env.Ctx, env.Parent.ID, "agent2")
+	t.Fatalf("want Explore+code-reviewer, got %q+%q",
+		s1.SubagentType, s2.SubagentType)
+}
+
+// Test that current_tool is NOT cleared between rapid tool calls.
+// The TUI should always see the last active tool.
+func TestReconciler_CurrentToolPersistsBetweenCalls(t *testing.T) {
+	env := setupReconciler(t)
+
+	// 1. tool_use: Read
+	env.Bus.Publish(claudeio.TranscriptEntry{
+		ProjectPath: "/tmp/p",
+		SessionID:   "claude-sess",
+		AgentID:     "deadbeef",
+		Entry:       buildToolUseEntry("id1", "Read"),
+	})
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		sub, err := env.Store.Subagents().GetByAgentID(env.Ctx, env.Parent.ID, "deadbeef")
+		if err == nil && sub.CurrentTool.Valid && sub.CurrentTool.String == "Read" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	sub, _ := env.Store.Subagents().GetByAgentID(env.Ctx, env.Parent.ID, "deadbeef")
+	if !sub.CurrentTool.Valid || sub.CurrentTool.String != "Read" {
+		t.Fatalf("want Read, got %q", sub.CurrentTool.String)
+	}
+
+	// 2. tool_result for Read — current_tool should NOT be cleared.
+	env.Bus.Publish(claudeio.TranscriptEntry{
+		ProjectPath: "/tmp/p",
+		SessionID:   "claude-sess",
+		AgentID:     "deadbeef",
+		Entry:       buildToolResultEntry("id1"),
+	})
+
+	time.Sleep(100 * time.Millisecond)
+
+	sub, err := env.Store.Subagents().GetByAgentID(env.Ctx, env.Parent.ID, "deadbeef")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !sub.CurrentTool.Valid || sub.CurrentTool.String != "Read" {
+		t.Fatalf("current_tool cleared to %q after tool_result; want Read to persist",
+			sub.CurrentTool.String)
+	}
+
+	// 3. New tool_use: Grep — should update to new tool.
+	env.Bus.Publish(claudeio.TranscriptEntry{
+		ProjectPath: "/tmp/p",
+		SessionID:   "claude-sess",
+		AgentID:     "deadbeef",
+		Entry:       buildToolUseEntry("id2", "Grep"),
+	})
+
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		sub, err = env.Store.Subagents().GetByAgentID(env.Ctx, env.Parent.ID, "deadbeef")
+		if err == nil && sub.CurrentTool.Valid && sub.CurrentTool.String == "Grep" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("want Grep, got %q", sub.CurrentTool.String)
 }

@@ -277,6 +277,16 @@ func (r *SessionsRepo) SetAttention(
 	return err
 }
 
+// BindClaudeSession associates a Claude Code session id with a
+// mosaic session. This is the repository-layer equivalent of the raw
+// SQL UPDATE that binder.go and tests use to link the two.
+func (r *SessionsRepo) BindClaudeSession(ctx context.Context, id, claudeSessionID string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE sessions SET claude_session_id = ? WHERE id = ?`,
+		sql.NullString{String: claudeSessionID, Valid: claudeSessionID != ""}, id)
+	return err
+}
+
 // Delete removes a session row.
 func (r *SessionsRepo) Delete(ctx context.Context, id string) error {
 	res, err := r.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, id)
