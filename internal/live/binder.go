@@ -2,8 +2,6 @@ package live
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -233,13 +231,7 @@ func (b *Binder) bind(ctx context.Context, mosaicSessionID, claudeSessionID stri
 		b.markBound(mosaicSessionID, claudeSessionID)
 		return nil
 	}
-	if _, err := b.store.DB().ExecContext(ctx,
-		`UPDATE sessions SET claude_session_id = ? WHERE id = ?`,
-		sql.NullString{String: claudeSessionID, Valid: true}, mosaicSessionID,
-	); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
-		}
+	if err := b.store.Sessions().BindClaudeSession(ctx, mosaicSessionID, claudeSessionID); err != nil {
 		return err
 	}
 	b.markBound(mosaicSessionID, claudeSessionID)

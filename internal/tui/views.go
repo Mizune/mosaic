@@ -373,6 +373,10 @@ func (m *Model) renderSubagentRowLine(row displayRow, innerWidth int) string {
 		icon = m.theme.ErrorTag.Render("✗")
 	}
 
+	// current_tool persists across tool gaps (not cleared between
+	// rapid calls), so the elapsed timer may reflect a prior tool's
+	// start time during inter-tool pauses. This is intentional:
+	// showing the last tool is more informative than "(idle)".
 	tool := "(idle)"
 	elapsed := ""
 	if s.CurrentTool.Valid && s.CurrentTool.String != "" {
@@ -381,10 +385,7 @@ func (m *Model) renderSubagentRowLine(row displayRow, innerWidth int) string {
 			elapsed = " ⏱" + humanAge(s.CurrentToolStartedAt.Time)
 		}
 	}
-	label := s.SubagentType
-	if s.Description.Valid && s.Description.String != "" {
-		label = s.Description.String
-	}
+	label := subagentLabel(s)
 
 	// Tree connector — └─ for the last sibling, ├─ for every
 	// other child. The leading two spaces give us the same
@@ -821,6 +822,22 @@ func (m *Model) renderPreviewDiff(row store.Session, innerHeight, innerWidth int
 		strings.Join(lines, "\n")
 }
 
+// subagentLabel builds a human-readable label for a sub-agent row.
+// Format: "Explore: search for auth patterns" (colon-separated).
+// See also discordSubagentLabel in internal/discord/format.go which
+// uses bracket notation instead.
+func subagentLabel(sub store.Subagent) string {
+	hasType, typ, desc := sub.LabelParts()
+	switch {
+	case hasType && desc != "":
+		return typ + ": " + desc
+	case desc != "":
+		return desc
+	default:
+		return typ
+	}
+}
+
 // formatSubAgentLines is the shared formatter for sub-agent
 // preview lists.
 func (m *Model) formatSubAgentLines(subs []store.Subagent) []string {
@@ -842,10 +859,7 @@ func (m *Model) formatSubAgentLines(subs []store.Subagent) []string {
 				tool += " ⏱" + humanAge(sub.CurrentToolStartedAt.Time)
 			}
 		}
-		label := sub.SubagentType
-		if sub.Description.Valid && sub.Description.String != "" {
-			label = sub.Description.String
-		}
+		label := subagentLabel(sub)
 		lines = append(lines, fmt.Sprintf("%s %s · %s", icon, label, tool))
 	}
 	return lines

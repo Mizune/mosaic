@@ -2,7 +2,9 @@ package live
 
 import (
 	"regexp"
+	"time"
 
+	"github.com/Mizune/mosaic/internal/store"
 	"github.com/Mizune/mosaic/pkg/transcript"
 )
 
@@ -24,7 +26,15 @@ type agentMetadata struct {
 type pendingAgentTool struct {
 	ClaudeSessionID string
 	Input           transcript.SubAgentInput
+	CreatedAt       time.Time
 }
+
+// pendingToolExpiry is the maximum age a pending tool entry can reach
+// before it is considered stale and pruned. This prevents the queue
+// from growing unboundedly when an Agent tool_use never receives a
+// matching tool_result (e.g. the agent crashed before writing any
+// transcript).
+const pendingToolExpiry = time.Minute
 
 // agentIDPattern captures the "agentId: <hex>" marker Claude Code
 // embeds in the tool_result text for a successful Agent launch. The
@@ -49,11 +59,12 @@ func extractAgentID(raw []byte) string {
 
 // defaultSubagentType returns the value that goes into the
 // subagents.subagent_type column when Claude does not specify one
-// explicitly. Using "general-purpose" matches Claude Code's own
-// default so the TUI row does not show "" when metadata is missing.
+// explicitly. Using store.DefaultSubagentType matches Claude Code's
+// own default so the TUI row does not show "" when metadata is
+// missing.
 func defaultSubagentType(s string) string {
 	if s == "" {
-		return "general-purpose"
+		return store.DefaultSubagentType
 	}
 	return s
 }

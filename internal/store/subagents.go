@@ -12,6 +12,12 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
+// DefaultSubagentType is the placeholder subagent_type used when
+// Claude Code does not specify one explicitly (i.e. the user wrote
+// Agent without a subagent_type parameter). Exported so the TUI,
+// Discord, and reconciler can filter it out of display labels.
+const DefaultSubagentType = "general-purpose"
+
 // SubagentStatus values stored in the subagents.status column.
 type SubagentStatus string
 
@@ -37,6 +43,18 @@ type Subagent struct {
 	CurrentTool         sql.NullString `db:"current_tool"`
 	CurrentToolStartedAt sql.NullTime  `db:"current_tool_started_at"`
 	LastEventOffset     int64          `db:"last_event_offset"`
+}
+
+// LabelParts reports whether the row carries a meaningful (non-default)
+// type and a non-empty description. Callers use the results to format
+// display labels without duplicating the DefaultSubagentType filter.
+func (s Subagent) LabelParts() (hasType bool, typ, desc string) {
+	hasType = s.SubagentType != "" && s.SubagentType != DefaultSubagentType
+	typ = s.SubagentType
+	if s.Description.Valid {
+		desc = s.Description.String
+	}
+	return
 }
 
 // NewSubagent is the input shape for [SubagentsRepo.Upsert].
@@ -193,6 +211,18 @@ func (r *SubagentsRepo) UpdateRunningTool(ctx context.Context, id, toolName stri
         WHERE id = ? AND status IN (?, ?)`,
 		toolName, startedAt.UTC(), string(SubagentRunning), id,
 		string(SubagentSpawning), string(SubagentRunning))
+	return err
+}
+
+// PromoteSpawning transitions a sub-agent from "spawning" to
+// "running" without touching current_tool. This is used when a
+// transcript entry arrives that contains no tool_use block (e.g.
+// plain text), so the status reflects activity even though no tool
+// is active yet.
+func (r *SubagentsRepo) PromoteSpawning(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE subagents SET status = ? WHERE id = ? AND status = ?`,
+		string(SubagentRunning), id, string(SubagentSpawning))
 	return err
 }
 

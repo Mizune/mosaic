@@ -41,6 +41,21 @@ type Reconciler struct {
 	// and tells us which agent_id this Agent call produced.
 	pendingAgentTools map[string]pendingAgentTool
 
+	// pendingQueue tracks unmatched Agent tool_use IDs in the order
+	// they appeared, keyed by claudeSessionID. When a
+	// SubagentSpawned event arrives, the first entry is popped and
+	// its metadata is applied speculatively — before the definitive
+	// tool_result has arrived.
+	//
+	// ORDERING ASSUMPTION: Claude Code processes Agent tool_use
+	// blocks sequentially within a single assistant message and
+	// spawns sub-agents in the same order, so FIFO matching between
+	// the queue and SubagentSpawned events is correct. If this
+	// assumption is ever violated (e.g. filesystem event reordering),
+	// the definitive tool_result path in applyParentEntry will
+	// overwrite the speculative metadata with the correct values.
+	pendingQueue map[string][]string // claudeSessionID → ordered []tool_use_id
+
 	// agentMeta maps (claudeSessionID + "::" + agentID) → resolved
 	// metadata for a sub-agent. Populated lazily as parent
 	// tool_results arrive, and consumed when sub-agent transcript
@@ -84,6 +99,7 @@ func NewReconciler(s *store.Store, b *bus.Bus, opts ...Option) *Reconciler {
 		log:               slog.With("subsys", "live.reconciler"),
 		machines:          map[string]*claudeio.StateMachine{},
 		pendingAgentTools: map[string]pendingAgentTool{},
+		pendingQueue:      map[string][]string{},
 		agentMeta:         map[string]agentMetadata{},
 		metaApplied:       map[string]bool{},
 		staleness:         defaultStaleness,
@@ -160,7 +176,7 @@ func (r *Reconciler) handleSpawn(ctx context.Context, ev claudeio.SubagentSpawne
 	if !ok {
 		return
 	}
-	meta := r.lookupAgentMeta(ev.SessionID, ev.AgentID)
+	meta := r.resolveAgentMeta(ev.SessionID, ev.AgentID)
 	transcriptPath := claudeio.SubagentTranscriptPath("", ev.ProjectPath, ev.SessionID, ev.AgentID)
 	sub, err := r.store.Subagents().Upsert(ctx, store.NewSubagent{
 		ParentSessionID: parent.ID,
@@ -228,10 +244,18 @@ func (r *Reconciler) handleEntry(ctx context.Context, ev claudeio.TranscriptEntr
 	sm.Observe(ev.Entry)
 	snap := sm.Snapshot()
 
-	if snap.CurrentTool == "" {
-		_ = r.store.Subagents().UpdateRunningTool(ctx, sub.ID, "", time.Time{})
-	} else {
+	// Only persist tool changes when a new tool starts. Avoid
+	// clearing current_tool between rapid tool calls — the TUI's
+	// 1 Hz refresh almost always misses the momentary non-idle
+	// window, resulting in permanent "(idle)" for fast agents.
+	// MarkCompleted / MarkErrored handle the final cleanup.
+	if snap.CurrentTool != "" {
 		_ = r.store.Subagents().UpdateRunningTool(ctx, sub.ID, snap.CurrentTool, snap.CurrentToolStartedAt)
+	} else {
+		// No active tool, but we still need the spawning → running
+		// status transition so the TUI shows the correct icon for
+		// agents whose first transcript entries are text-only.
+		_ = r.store.Subagents().PromoteSpawning(ctx, sub.ID)
 	}
 }
 
@@ -264,7 +288,11 @@ func (r *Reconciler) applyParentEntry(ctx context.Context, ev claudeio.Transcrip
 				r.pendingAgentTools[block.ID] = pendingAgentTool{
 					ClaudeSessionID: ev.SessionID,
 					Input:           in,
+					CreatedAt:       time.Now(),
 				}
+				r.pendingQueue[ev.SessionID] = append(
+					r.pendingQueue[ev.SessionID], block.ID,
+				)
 				r.mu.Unlock()
 
 			case block.IsToolResult() && block.ToolUseID != "":
@@ -275,6 +303,9 @@ func (r *Reconciler) applyParentEntry(ctx context.Context, ev claudeio.Transcrip
 					continue
 				}
 				delete(r.pendingAgentTools, block.ToolUseID)
+				// Also remove from the speculative queue if it
+				// was not already consumed by speculativeMatch.
+				r.removeFromQueue(pending.ClaudeSessionID, block.ToolUseID)
 				r.mu.Unlock()
 
 				agentID := extractAgentID(block.Content)
@@ -369,6 +400,81 @@ func (r *Reconciler) storeAgentMeta(claudeSessionID, agentID string, meta agentM
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.agentMeta[claudeSessionID+"::"+agentID] = meta
+}
+
+// resolveAgentMeta returns metadata for a sub-agent under a single
+// lock acquisition. It first checks agentMeta (populated when the
+// parent's tool_result arrives). If no entry exists, it falls back
+// to speculative FIFO matching against the pending Agent tool_use
+// queue — Claude Code spawns sub-agents in the same order the
+// tool_use blocks appeared in the parent transcript.
+func (r *Reconciler) resolveAgentMeta(claudeSessionID, agentID string) agentMetadata {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Fast path: metadata already resolved by the tool_result handler.
+	key := claudeSessionID + "::" + agentID
+	if meta, ok := r.agentMeta[key]; ok {
+		return meta
+	}
+
+	// Slow path: speculative FIFO match against the pending queue.
+	queue := r.pendingQueue[claudeSessionID]
+	now := time.Now()
+
+	// Compact: drop consumed or stale entries from both the queue
+	// and pendingAgentTools so subsequent calls never re-scan them.
+	j := 0
+	for _, id := range queue {
+		p, ok := r.pendingAgentTools[id]
+		if !ok {
+			continue // consumed by tool_result handler
+		}
+		if !p.CreatedAt.IsZero() && now.Sub(p.CreatedAt) > pendingToolExpiry {
+			delete(r.pendingAgentTools, id)
+			continue // stale
+		}
+		queue[j] = id
+		j++
+	}
+	queue = queue[:j]
+
+	// Match: take the first remaining entry.
+	if len(queue) == 0 {
+		r.pendingQueue[claudeSessionID] = queue
+		return agentMetadata{}
+	}
+
+	toolUseID := queue[0]
+	pending := r.pendingAgentTools[toolUseID]
+	meta := agentMetadata{
+		Description:     pending.Input.Description,
+		SubagentType:    pending.Input.SubagentType,
+		RunInBackground: pending.Input.RunInBackground,
+	}
+	// Store the metadata so subsequent handleEntry calls find it.
+	r.agentMeta[key] = meta
+
+	// Remove the matched entry from queue but NOT from
+	// pendingAgentTools — the tool_result handler still needs the
+	// entry to extract the definitive agent_id and confirm the match.
+	r.pendingQueue[claudeSessionID] = queue[1:]
+	return meta
+}
+
+// removeFromQueue removes a single tool_use_id from the per-session
+// pending queue. Caller must hold r.mu.
+func (r *Reconciler) removeFromQueue(claudeSessionID, toolUseID string) {
+	q, ok := r.pendingQueue[claudeSessionID]
+	if !ok {
+		return
+	}
+	for i, id := range q {
+		if id == toolUseID {
+			r.pendingQueue[claudeSessionID] = append(q[:i], q[i+1:]...)
+			return
+		}
+	}
 }
 
 func (r *Reconciler) handleHookBusy(ctx context.Context, ev hook.BusyEvent) {
@@ -516,6 +622,7 @@ func (r *Reconciler) sweepLoop(ctx context.Context) {
 		case <-ticker.C:
 			sweepCtx, cancel := context.WithTimeout(ctx, sweepTimeout)
 			r.sweepStaleSubagents(sweepCtx, r.staleness)
+			r.pruneStalePendingTools()
 			cancel()
 		}
 	}
@@ -571,6 +678,34 @@ func (r *Reconciler) sweepStaleSubagents(ctx context.Context, staleness time.Dur
 			time.Since(lastActive) > staleness {
 			r.markSubagentDone(ctx, sub.ID,
 				sub.ClaudeSessionID, sub.AgentID, false)
+		}
+	}
+}
+
+// pruneStalePendingTools removes expired entries from
+// pendingAgentTools and pendingQueue. An entry expires when its
+// tool_result never arrived within pendingToolExpiry.
+func (r *Reconciler) pruneStalePendingTools() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now()
+	for id, p := range r.pendingAgentTools {
+		if !p.CreatedAt.IsZero() && now.Sub(p.CreatedAt) > pendingToolExpiry {
+			delete(r.pendingAgentTools, id)
+		}
+	}
+	for sid, queue := range r.pendingQueue {
+		filtered := queue[:0] // in-place filter reusing the backing array
+		for _, id := range queue {
+			if _, ok := r.pendingAgentTools[id]; ok {
+				filtered = append(filtered, id)
+			}
+		}
+		if len(filtered) == 0 {
+			delete(r.pendingQueue, sid)
+		} else {
+			r.pendingQueue[sid] = filtered
 		}
 	}
 }
