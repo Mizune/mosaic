@@ -33,13 +33,18 @@ const (
 const enterKey = ""
 
 // discordSubagentLabel builds a label for a sub-agent, combining
-// type and description when both are available.
-// Format: "[Explore] search for auth patterns" (bracket notation).
+// type, name, and description when available. When a name is set it
+// takes priority over the generic type.
+// Format: "[explore-auth] search for patterns" (bracket notation).
 // See also subagentLabel in internal/tui/views.go which uses
 // colon-separated notation instead.
 func discordSubagentLabel(sub store.Subagent) string {
-	hasType, typ, desc := sub.LabelParts()
+	hasType, typ, name, desc := sub.LabelParts()
 	switch {
+	case name != "" && desc != "":
+		return "[" + name + "] " + desc
+	case name != "":
+		return "[" + name + "]"
 	case hasType && desc != "":
 		return "[" + typ + "] " + desc
 	case desc != "":

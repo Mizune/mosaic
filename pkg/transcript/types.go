@@ -117,11 +117,12 @@ func (b ContentBlock) IsText() bool { return b.Type == "text" }
 // payload. mosaic uses it to extract the sub-agent type and the
 // human-readable description for the TUI.
 type SubAgentInput struct {
-	Description    string `json:"description"`
-	SubagentType   string `json:"subagent_type"`
-	Prompt         string `json:"prompt"`
-	Model          string `json:"model"`
-	RunInBackground bool  `json:"run_in_background"`
+	Name            string `json:"name"`
+	Description     string `json:"description"`
+	SubagentType    string `json:"subagent_type"`
+	Prompt          string `json:"prompt"`
+	Model           string `json:"model"`
+	RunInBackground bool   `json:"run_in_background"`
 }
 
 // ParseSubAgentInput decodes a tool_use block whose name is "Agent"

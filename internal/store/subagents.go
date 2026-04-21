@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -30,27 +31,31 @@ const (
 
 // Subagent is the row type for the subagents table.
 type Subagent struct {
-	ID                  string         `db:"id"`
-	ParentSessionID     string         `db:"parent_session_id"`
-	ClaudeSessionID     string         `db:"claude_session_id"`
-	AgentID             string         `db:"agent_id"`
-	SubagentType        string         `db:"subagent_type"`
-	Description         sql.NullString `db:"description"`
-	Status              string         `db:"status"`
-	StartedAt           time.Time      `db:"started_at"`
-	CompletedAt         sql.NullTime   `db:"completed_at"`
-	TranscriptPath      string         `db:"transcript_path"`
-	CurrentTool         sql.NullString `db:"current_tool"`
-	CurrentToolStartedAt sql.NullTime  `db:"current_tool_started_at"`
-	LastEventOffset     int64          `db:"last_event_offset"`
+	ID                   string         `db:"id"`
+	ParentSessionID      string         `db:"parent_session_id"`
+	ClaudeSessionID      string         `db:"claude_session_id"`
+	AgentID              string         `db:"agent_id"`
+	SubagentType         string         `db:"subagent_type"`
+	Name                 sql.NullString `db:"name"`
+	Description          sql.NullString `db:"description"`
+	Status               string         `db:"status"`
+	StartedAt            time.Time      `db:"started_at"`
+	CompletedAt          sql.NullTime   `db:"completed_at"`
+	TranscriptPath       string         `db:"transcript_path"`
+	CurrentTool          sql.NullString `db:"current_tool"`
+	CurrentToolStartedAt sql.NullTime   `db:"current_tool_started_at"`
+	LastEventOffset      int64          `db:"last_event_offset"`
 }
 
 // LabelParts reports whether the row carries a meaningful (non-default)
 // type and a non-empty description. Callers use the results to format
 // display labels without duplicating the DefaultSubagentType filter.
-func (s Subagent) LabelParts() (hasType bool, typ, desc string) {
+func (s Subagent) LabelParts() (hasType bool, typ, name, desc string) {
 	hasType = s.SubagentType != "" && s.SubagentType != DefaultSubagentType
 	typ = s.SubagentType
+	if s.Name.Valid {
+		name = s.Name.String
+	}
 	if s.Description.Valid {
 		desc = s.Description.String
 	}
@@ -63,6 +68,7 @@ type NewSubagent struct {
 	ClaudeSessionID string
 	AgentID         string
 	SubagentType    string
+	Name            string
 	Description     string
 	TranscriptPath  string
 }
@@ -103,6 +109,7 @@ func (r *SubagentsRepo) Upsert(ctx context.Context, in NewSubagent) (Subagent, e
 		ClaudeSessionID: in.ClaudeSessionID,
 		AgentID:         in.AgentID,
 		SubagentType:    in.SubagentType,
+		Name:            sql.NullString{String: in.Name, Valid: in.Name != ""},
 		Description:     sql.NullString{String: in.Description, Valid: in.Description != ""},
 		Status:          string(SubagentSpawning),
 		StartedAt:       time.Now().UTC(),
@@ -111,10 +118,10 @@ func (r *SubagentsRepo) Upsert(ctx context.Context, in NewSubagent) (Subagent, e
 	_, err = r.db.NamedExecContext(ctx, `
         INSERT INTO subagents (
             id, parent_session_id, claude_session_id, agent_id, subagent_type,
-            description, status, started_at, transcript_path
+            name, description, status, started_at, transcript_path
         ) VALUES (
             :id, :parent_session_id, :claude_session_id, :agent_id, :subagent_type,
-            :description, :status, :started_at, :transcript_path
+            :name, :description, :status, :started_at, :transcript_path
         )`, row)
 	if err != nil {
 		return Subagent{}, fmt.Errorf("insert subagent: %w", err)
@@ -155,34 +162,44 @@ func (r *SubagentsRepo) ListRunning(ctx context.Context) ([]Subagent, error) {
 	return out, err
 }
 
-// SetMetadata updates the human-facing description and the
-// subagent_type for a row. It is called once the reconciler has
-// parsed the parent transcript's `Agent` tool_use/tool_result pair
-// and knows the real values — before that point we only know the
-// agent_id, so rows are inserted with a placeholder type and get
-// filled in when the metadata lands.
+// SubagentMeta groups the human-facing metadata fields that arrive
+// from the parent transcript's Agent tool_use input. Using a struct
+// prevents call-site argument transposition and makes future field
+// additions backward-compatible.
+type SubagentMeta struct {
+	Name         string
+	Description  string
+	SubagentType string
+}
+
+// SetMetadata updates the human-facing metadata for a row. It is
+// called once the reconciler has parsed the parent transcript's
+// `Agent` tool_use/tool_result pair and knows the real values —
+// before that point we only know the agent_id, so rows are inserted
+// with a placeholder type and get filled in when the metadata lands.
 //
 // Empty values are ignored so repeated calls never blank out
 // fields that another code path already populated.
-func (r *SubagentsRepo) SetMetadata(ctx context.Context, id, description, subagentType string) error {
-	if description == "" && subagentType == "" {
+func (r *SubagentsRepo) SetMetadata(ctx context.Context, id string, meta SubagentMeta) error {
+	if meta.Name == "" && meta.Description == "" && meta.SubagentType == "" {
 		return nil
 	}
-	var (
-		query string
-		args  []any
-	)
-	switch {
-	case description != "" && subagentType != "":
-		query = `UPDATE subagents SET description = ?, subagent_type = ? WHERE id = ?`
-		args = []any{description, subagentType, id}
-	case description != "":
-		query = `UPDATE subagents SET description = ? WHERE id = ?`
-		args = []any{description, id}
-	default:
-		query = `UPDATE subagents SET subagent_type = ? WHERE id = ?`
-		args = []any{subagentType, id}
+	var sets []string
+	var args []any
+	if meta.Name != "" {
+		sets = append(sets, "name = ?")
+		args = append(args, meta.Name)
 	}
+	if meta.Description != "" {
+		sets = append(sets, "description = ?")
+		args = append(args, meta.Description)
+	}
+	if meta.SubagentType != "" {
+		sets = append(sets, "subagent_type = ?")
+		args = append(args, meta.SubagentType)
+	}
+	args = append(args, id)
+	query := "UPDATE subagents SET " + strings.Join(sets, ", ") + " WHERE id = ?"
 	_, err := r.db.ExecContext(ctx, query, args...)
 	return err
 }
