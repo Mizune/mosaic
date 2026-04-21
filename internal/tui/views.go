@@ -823,12 +823,17 @@ func (m *Model) renderPreviewDiff(row store.Session, innerHeight, innerWidth int
 }
 
 // subagentLabel builds a human-readable label for a sub-agent row.
-// Format: "Explore: search for auth patterns" (colon-separated).
+// When a name is set it takes priority over the generic type, e.g.
+// "explore-auth: search for patterns" instead of "Explore: search...".
 // See also discordSubagentLabel in internal/discord/format.go which
 // uses bracket notation instead.
 func subagentLabel(sub store.Subagent) string {
-	hasType, typ, desc := sub.LabelParts()
+	hasType, typ, name, desc := sub.LabelParts()
 	switch {
+	case name != "" && desc != "":
+		return name + ": " + desc
+	case name != "":
+		return name
 	case hasType && desc != "":
 		return typ + ": " + desc
 	case desc != "":

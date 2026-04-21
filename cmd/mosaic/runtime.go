@@ -140,6 +140,7 @@ func openRuntime(ctx context.Context, opts runtimeOptions) (*runtime, error) {
 		sessionSvc.Cfg.ToolFlags = res.Config.Mosaic.Tools
 	}
 	sessionSvc.Cfg.Docker = res.Config.Docker
+	sessionSvc.Cfg.Worktree = res.Config.Worktree
 	sessionSvc.Cfg.Projects = res.Config.Projects
 	rt := &runtime{
 		paths:     paths,

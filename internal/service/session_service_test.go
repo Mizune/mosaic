@@ -178,7 +178,7 @@ var _ = Describe("SessionService", func() {
 			// drain the start event
 			Eventually(received, "1s").Should(Receive())
 
-			Expect(svc.Kill(ctx, "to-kill")).To(Succeed())
+			Expect(svc.Kill(ctx, "to-kill", service.KillOptions{})).To(Succeed())
 
 			_, err = st.Sessions().GetByID(ctx, row.ID)
 			Expect(errors.Is(err, store.ErrSessionNotFound)).To(BeTrue())

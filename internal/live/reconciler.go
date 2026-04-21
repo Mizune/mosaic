@@ -183,6 +183,7 @@ func (r *Reconciler) handleSpawn(ctx context.Context, ev claudeio.SubagentSpawne
 		ClaudeSessionID: ev.SessionID,
 		AgentID:         ev.AgentID,
 		SubagentType:    defaultSubagentType(meta.SubagentType),
+		Name:            meta.Name,
 		Description:     meta.Description,
 		TranscriptPath:  transcriptPath,
 	})
@@ -192,7 +193,11 @@ func (r *Reconciler) handleSpawn(ctx context.Context, ev claudeio.SubagentSpawne
 	}
 	// If the row already existed with placeholder metadata, apply
 	// whatever we know now.
-	_ = r.store.Subagents().SetMetadata(ctx, sub.ID, meta.Description, meta.SubagentType)
+	_ = r.store.Subagents().SetMetadata(ctx, sub.ID, store.SubagentMeta{
+		Name:         meta.Name,
+		Description:  meta.Description,
+		SubagentType: meta.SubagentType,
+	})
 }
 
 func (r *Reconciler) handleEntry(ctx context.Context, ev claudeio.TranscriptEntry) {
@@ -216,6 +221,7 @@ func (r *Reconciler) handleEntry(ctx context.Context, ev claudeio.TranscriptEntr
 		ClaudeSessionID: ev.SessionID,
 		AgentID:         ev.AgentID,
 		SubagentType:    defaultSubagentType(meta.SubagentType),
+		Name:            meta.Name,
 		Description:     meta.Description,
 		TranscriptPath:  ev.Entry.CWD, // best-effort fallback
 	})
@@ -233,8 +239,12 @@ func (r *Reconciler) handleEntry(ctx context.Context, ev claudeio.TranscriptEntr
 	r.mu.Lock()
 	applied := r.metaApplied[metaMapKey]
 	r.mu.Unlock()
-	if !applied && (meta.Description != "" || meta.SubagentType != "") {
-		_ = r.store.Subagents().SetMetadata(ctx, sub.ID, meta.Description, meta.SubagentType)
+	if !applied && (meta.Name != "" || meta.Description != "" || meta.SubagentType != "") {
+		_ = r.store.Subagents().SetMetadata(ctx, sub.ID, store.SubagentMeta{
+			Name:         meta.Name,
+			Description:  meta.Description,
+			SubagentType: meta.SubagentType,
+		})
 		r.mu.Lock()
 		r.metaApplied[metaMapKey] = true
 		r.mu.Unlock()
@@ -313,6 +323,7 @@ func (r *Reconciler) applyParentEntry(ctx context.Context, ev claudeio.Transcrip
 					continue
 				}
 				meta := agentMetadata{
+					Name:            pending.Input.Name,
 					Description:     pending.Input.Description,
 					SubagentType:    pending.Input.SubagentType,
 					RunInBackground: pending.Input.RunInBackground,
@@ -332,11 +343,16 @@ func (r *Reconciler) applyParentEntry(ctx context.Context, ev claudeio.Transcrip
 						ClaudeSessionID: pending.ClaudeSessionID,
 						AgentID:         agentID,
 						SubagentType:    defaultSubagentType(meta.SubagentType),
+						Name:            meta.Name,
 						Description:     meta.Description,
 						TranscriptPath:  transcriptPath,
 					})
 					if err == nil {
-						_ = r.store.Subagents().SetMetadata(ctx, sub.ID, meta.Description, meta.SubagentType)
+						_ = r.store.Subagents().SetMetadata(ctx, sub.ID, store.SubagentMeta{
+							Name:         meta.Name,
+							Description:  meta.Description,
+							SubagentType: meta.SubagentType,
+						})
 						metaMapKey := subagentKey(pending.ClaudeSessionID, agentID)
 						r.mu.Lock()
 						r.metaApplied[metaMapKey] = true
@@ -448,6 +464,7 @@ func (r *Reconciler) resolveAgentMeta(claudeSessionID, agentID string) agentMeta
 	toolUseID := queue[0]
 	pending := r.pendingAgentTools[toolUseID]
 	meta := agentMetadata{
+		Name:            pending.Input.Name,
 		Description:     pending.Input.Description,
 		SubagentType:    pending.Input.SubagentType,
 		RunInBackground: pending.Input.RunInBackground,

@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Mizune/mosaic/internal/bus"
@@ -67,6 +68,10 @@ type SessionServiceConfig struct {
 	// Docker carries the resolved [docker] defaults for sandbox
 	// spec resolution.
 	Docker config.DockerSection
+
+	// Worktree carries the [worktree] section so Kill can honour
+	// the auto_cleanup setting.
+	Worktree config.WorktreeSection
 
 	// Projects is the registered project list used for per-project
 	// sandbox opt-in resolution.
@@ -346,6 +351,14 @@ func (s *SessionService) injectInitialPrompt(tmuxSession, prompt string) {
 	_ = s.tmux.SendKeys(ctx, tmuxSession, prompt, true)
 }
 
+// KillOptions controls optional cleanup behaviour during Kill.
+type KillOptions struct {
+	// CleanupWorktree, when non-nil, overrides the config-driven
+	// auto_cleanup setting for this invocation. true = remove the
+	// worktree, false = keep it.
+	CleanupWorktree *bool
+}
+
 // Kill removes the tmux session and deletes its database row.
 //
 // When the session was launched in docker mode and the docker
@@ -354,7 +367,12 @@ func (s *SessionService) injectInitialPrompt(tmuxSession, prompt string) {
 // initial `--rm` because the agent did not exit cleanly) is
 // not left lying around. Errors are swallowed because the
 // cleanup is a hint, not a correctness boundary.
-func (s *SessionService) Kill(ctx context.Context, name string) error {
+//
+// When the effective worktree cleanup decision is true (via
+// config or opts override), Kill also removes the git worktree
+// from disk. Only worktrees under a `.worktrees/` directory
+// are eligible — the main project directory is never deleted.
+func (s *SessionService) Kill(ctx context.Context, name string, opts KillOptions) error {
 	row, err := s.store.Sessions().GetByName(ctx, name)
 	if err != nil {
 		return err
@@ -365,6 +383,7 @@ func (s *SessionService) Kill(ctx context.Context, name string) error {
 	if row.SandboxMode == sandbox.ModeDocker.String() && config.BoolOr(s.Cfg.Docker.AutoCleanup, true) {
 		removeSandboxContainer(row.SandboxContainer)
 	}
+	s.maybeCleanupWorktree(ctx, row, opts)
 	if err := s.store.Sessions().Delete(ctx, row.ID); err != nil {
 		return err
 	}
@@ -372,6 +391,37 @@ func (s *SessionService) Kill(ctx context.Context, name string) error {
 		s.bus.Publish(bus.SessionStopped{SessionID: row.ID, At: time.Now()})
 	}
 	return nil
+}
+
+// worktreePathSegment is the directory component that identifies a
+// mosaic-managed worktree. Only paths containing this segment are
+// eligible for automatic cleanup — the main project directory is
+// never deleted.
+const worktreePathSegment = "/.worktrees/"
+
+// maybeCleanupWorktree removes the session's git worktree when the
+// effective cleanup decision is true. Safety: only acts when the
+// worktree path differs from the project path (i.e., mosaic created
+// a separate worktree), AND the path lives under a `.worktrees/`
+// directory. Errors are swallowed (best-effort, matching Docker).
+func (s *SessionService) maybeCleanupWorktree(ctx context.Context, row store.Session, opts KillOptions) {
+	if s.worktree == nil {
+		return
+	}
+	shouldClean := config.BoolOr(s.Cfg.Worktree.AutoCleanup, false)
+	if opts.CleanupWorktree != nil {
+		shouldClean = *opts.CleanupWorktree
+	}
+	if !shouldClean {
+		return
+	}
+	if row.WorktreePath == row.ProjectPath {
+		return
+	}
+	if !strings.Contains(row.WorktreePath, worktreePathSegment) {
+		return
+	}
+	_ = s.worktree.Remove(ctx, row.ProjectPath, row.WorktreePath, true)
 }
 
 // RespawnResult reports the outcome of a single session respawn attempt.

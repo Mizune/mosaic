@@ -200,6 +200,7 @@ type WorktreeSection struct {
 	Root              string                   `toml:"root"`
 	DefaultBaseBranch string                   `toml:"default_base_branch"`
 	AutoWorktree      bool                     `toml:"auto_worktree"`
+	AutoCleanup       *bool                    `toml:"auto_cleanup"`
 	DefaultSetup      string                   `toml:"default_setup"`
 	Setup             map[string]WorktreeSetup `toml:"setup"`
 }
