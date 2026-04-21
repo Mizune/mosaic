@@ -176,7 +176,7 @@ func (br *Bridge) cmdKill(i *discordgo.InteractionCreate) {
 	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
 	defer cancel()
 
-	if err := br.sessions.Kill(ctx, name); err != nil {
+	if err := br.sessions.Kill(ctx, name, service.KillOptions{}); err != nil {
 		br.log.Warn("kill session failed", "name", name, "err", err)
 		br.respondEphemeral(i, "\u274C Failed to kill '"+name+"'")
 		return

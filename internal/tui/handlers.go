@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/Mizune/mosaic/internal/service"
 	"github.com/Mizune/mosaic/internal/store"
 )
 
@@ -709,7 +710,7 @@ func (m *Model) performBatchKill(names []string) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		for _, n := range names {
-			_ = m.sessions.Kill(ctx, n)
+			_ = m.sessions.Kill(ctx, n, service.KillOptions{})
 		}
 		return m.fetchRefreshed(ctx)
 	}
@@ -736,7 +737,7 @@ func (m *Model) performKill(name string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		_ = m.sessions.Kill(ctx, name)
+		_ = m.sessions.Kill(ctx, name, service.KillOptions{})
 		return m.fetchRefreshed(ctx)
 	}
 }
