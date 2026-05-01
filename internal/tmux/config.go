@@ -26,10 +26,13 @@ bind-key d detach-client
 
 # Open a side-pane diff view for the current session. Runs
 # 'mosaic diff' which auto-resolves the session via the
-# MOSAIC_WORKTREE_ID env var mosaic injected into this pane, and
-# pages the result through less -R so colored output stays
-# scrollable.
-bind-key D split-window -h "mosaic diff | less -R"
+# MOSAIC_WORKTREE_ID env var mosaic injected into this pane.
+# We deliberately do NOT pipe through 'less' here: the new pane
+# is a PTY, so git's own TTY detection enables --color and runs
+# its configured pager (less, by default) for us. Piping ourselves
+# would force --color=auto into "no color" because stdout becomes
+# a pipe.
+bind-key D split-window -h "mosaic diff"
 
 # Keep ESC snappy in editors running inside a session.
 set -sg escape-time 10
