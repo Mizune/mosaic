@@ -24,6 +24,13 @@ bind-key -n C-q detach-client
 # C-b d still work.
 bind-key d detach-client
 
+# Open a side-pane diff view for the current session. Runs
+# 'mosaic diff' which auto-resolves the session via the
+# MOSAIC_WORKTREE_ID env var mosaic injected into this pane, and
+# pages the result through less -R so colored output stays
+# scrollable.
+bind-key D split-window -h "mosaic diff | less -R"
+
 # Keep ESC snappy in editors running inside a session.
 set -sg escape-time 10
 
