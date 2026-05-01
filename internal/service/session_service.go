@@ -627,6 +627,12 @@ func (s *SessionService) hookEnv(row store.Session) map[string]string {
 	}
 }
 
+// defaultDiffBase is the fallback ref every diff helper uses when
+// SessionServiceConfig.DiffBaseBranch is empty. Centralising it keeps
+// the three callers (Diff / DiffFile / DiffCommand) from drifting
+// apart silently.
+const defaultDiffBase = "main"
+
 // DiffResult carries the file-level summary the Diff View shows in
 // its left pane.
 type DiffResult struct {
@@ -652,7 +658,7 @@ func (s *SessionService) Diff(ctx context.Context, name string) (DiffResult, err
 	}
 	base := s.Cfg.DiffBaseBranch
 	if base == "" {
-		base = "main"
+		base = defaultDiffBase
 	}
 	files, err := s.git.DiffAgainst(ctx, row.WorktreePath, base)
 	if err != nil {
@@ -678,18 +684,21 @@ func (s *SessionService) Diff(ctx context.Context, name string) (DiffResult, err
 func (s *SessionService) DiffCommand(ctx context.Context, sess store.Session, staged bool) (*exec.Cmd, error) {
 	base := s.Cfg.DiffBaseBranch
 	if base == "" {
-		base = "main"
+		base = defaultDiffBase
 	}
 	resolved, err := s.git.ResolveDiffBase(ctx, sess.WorktreePath, base)
 	if err != nil {
 		return nil, fmt.Errorf("resolve diff base: %w", err)
 	}
-	args := []string{"-C", sess.WorktreePath, "diff"}
+	args := []string{"diff"}
 	if staged {
 		args = append(args, "--cached")
 	}
 	args = append(args, resolved)
-	return exec.CommandContext(ctx, "git", args...), nil
+	// Going through git.Client.Cmd keeps Client.Binary honored — a
+	// custom git executable set on the client applies to the
+	// streaming diff path too, not just the captured-output helpers.
+	return s.git.Cmd(ctx, sess.WorktreePath, args...), nil
 }
 
 // DiffFile returns the unified diff for one file in a session's
@@ -703,7 +712,7 @@ func (s *SessionService) DiffFile(ctx context.Context, name, path string, untrac
 	}
 	base := s.Cfg.DiffBaseBranch
 	if base == "" {
-		base = "main"
+		base = defaultDiffBase
 	}
 	if untracked {
 		return s.git.ShowFile(ctx, row.WorktreePath, path)

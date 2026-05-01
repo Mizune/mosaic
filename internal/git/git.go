@@ -691,10 +691,21 @@ func isBinary(body []byte) bool {
 	return false
 }
 
+// Cmd builds an unstarted *exec.Cmd that invokes git inside repo with
+// the given args. Unlike [Client.run], it does not execute the
+// command or capture output — the caller is expected to wire up
+// Stdin/Stdout/Stderr (typically when streaming directly to a TTY,
+// e.g. `mosaic diff` in a tmux pane). Routing through this method
+// keeps every git invocation honoring [Client.Binary], so a custom
+// git executable configured on the client applies here too.
+func (c *Client) Cmd(ctx context.Context, repo string, args ...string) *exec.Cmd {
+	full := append([]string{"-C", repo}, args...)
+	return exec.CommandContext(ctx, c.binary(), full...)
+}
+
 // run executes a git subcommand inside repo and returns its stdout.
 func (c *Client) run(ctx context.Context, repo string, args ...string) (string, error) {
-	full := append([]string{"-C", repo}, args...)
-	cmd := exec.CommandContext(ctx, c.binary(), full...)
+	cmd := c.Cmd(ctx, repo, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
