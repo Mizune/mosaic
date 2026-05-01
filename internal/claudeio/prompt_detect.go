@@ -21,13 +21,15 @@ type AttentionHint struct {
 // they need the user to choose an action. It is a pure function so
 // it is trivial to unit-test and easy to extend with new markers.
 //
-// The detector recognises:
+// The detector recognises Claude Code's three known prompt phrasings,
+// all of which present the same numbered-option UI:
 //
-//   - "Do you want to proceed?" — Claude's default tool approval
-//     dialog ("1. Yes  2. Yes, and don't ask again  3. No").
+//   - "Do you want to proceed?" — default tool approval dialog
+//     ("1. Yes  2. Yes, and don't ask again  3. No").
 //   - "Permission required" — alternative phrasing used by
 //     permission-prompt hooks.
-//   - "Approve?" / "Continue? (y/n)" — common fallback prompts.
+//   - "Do you want to continue?" / "Approve this …" — fallback
+//     phrasings that share the same option list shape.
 //
 // To avoid false positives on assistant message text that happens to
 // contain a marker phrase (e.g. an answer that quotes "Permission
@@ -72,12 +74,17 @@ type attentionMarker struct {
 	title  string
 }
 
+// attentionMarkers is the canonical list of phrases that, when paired
+// with a numbered choice list nearby, identify a real Claude Code
+// permission prompt. The previous "(y/n)" entry was dropped because
+// hasChoiceListNear unconditionally requires an option list and a
+// bare y/n input never has one — keeping the marker would have been
+// dead code that suggested coverage we don't actually provide.
 var attentionMarkers = []attentionMarker{
 	{marker: "Do you want to proceed?", title: "Permission required"},
 	{marker: "Permission required", title: "Permission required"},
 	{marker: "Do you want to continue?", title: "Confirmation needed"},
 	{marker: "Approve this", title: "Approval needed"},
-	{marker: "(y/n)", title: "Input needed"},
 }
 
 // choiceListWindow is how many lines after the marker we look for a
@@ -109,6 +116,10 @@ func findMarkerAll(lines []string, marker string) []int {
 	return hits
 }
 
+// hasChoiceListNear reports whether any of the choiceListWindow lines
+// immediately following hitIdx looks like a Claude Code numbered
+// choice. This is the corroborating signal that distinguishes a real
+// prompt from narrative text that happens to contain a marker phrase.
 func hasChoiceListNear(lines []string, hitIdx int) bool {
 	end := hitIdx + 1 + choiceListWindow
 	if end > len(lines) {
