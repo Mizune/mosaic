@@ -121,6 +121,7 @@ detection, declarative worktree setup, and a built-in conductor.`,
 	root.AddCommand(newCreateCmd())
 	root.AddCommand(newListCmd())
 	root.AddCommand(newAttachCmd())
+	root.AddCommand(newDiffCmd())
 	root.AddCommand(newKillCmd())
 	root.AddCommand(newHookCmd())
 	root.AddCommand(newConductorCmd())
