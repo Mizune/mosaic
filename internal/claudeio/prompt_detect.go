@@ -47,18 +47,21 @@ func DetectAttention(capture string) AttentionHint {
 	lines := splitPlainLines(capture)
 
 	for _, m := range attentionMarkers {
-		hitIdx := findMarker(lines, m.marker)
-		if hitIdx < 0 {
-			continue
-		}
-		if !hasChoiceListNear(lines, hitIdx) {
-			continue
-		}
-		return AttentionHint{
-			Waiting: true,
-			Title:   m.title,
-			Body:    nearestContextAboveAt(lines, hitIdx),
-			Source:  "capture",
+		// Scan every occurrence of the marker, not just the first:
+		// narrative text earlier in the capture can quote a marker
+		// phrase without being a real prompt, and we must not let
+		// that uncorroborated hit shadow a genuine prompt further
+		// down the buffer.
+		for _, hitIdx := range findMarkerAll(lines, m.marker) {
+			if !hasChoiceListNear(lines, hitIdx) {
+				continue
+			}
+			return AttentionHint{
+				Waiting: true,
+				Title:   m.title,
+				Body:    nearestContextAboveAt(lines, hitIdx),
+				Source:  "capture",
+			}
 		}
 	}
 	return AttentionHint{}
@@ -91,13 +94,19 @@ const choiceListWindow = 6
 // near-zero-false-positive signal in real captures.
 var numberedChoice = regexp.MustCompile(`^\s*[›❯>]?\s*1\.\s+\S`)
 
-func findMarker(lines []string, marker string) int {
+// findMarkerAll returns every line index whose text contains marker,
+// in top-to-bottom order. Returning all hits — not just the first —
+// lets the caller keep looking when an early occurrence fails the
+// choice-list corroboration check, so a real prompt below an earlier
+// narrative mention is still detected.
+func findMarkerAll(lines []string, marker string) []int {
+	var hits []int
 	for i, l := range lines {
 		if strings.Contains(l, marker) {
-			return i
+			hits = append(hits, i)
 		}
 	}
-	return -1
+	return hits
 }
 
 func hasChoiceListNear(lines []string, hitIdx int) bool {
