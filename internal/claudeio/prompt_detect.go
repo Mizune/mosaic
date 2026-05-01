@@ -29,24 +29,35 @@ type AttentionHint struct {
 //     permission-prompt hooks.
 //   - "Approve?" / "Continue? (y/n)" — common fallback prompts.
 //
-// When multiple markers are present, the first match wins so the
-// returned Title stays stable across ticks.
+// To avoid false positives on assistant message text that happens to
+// contain a marker phrase (e.g. an answer that quotes "Permission
+// required"), every marker hit must be corroborated by an actual
+// prompt-UI shape near the marker line. Today that means a numbered-
+// choice line ("1. ...", optionally led by `›` or `❯`) within a
+// short window after the marker. The choice list is the most stable
+// signal: it appears in every Claude Code prompt variant we have
+// seen and is essentially never present in narrative output.
+//
+// When multiple markers are present, the first corroborated match
+// wins so the returned Title stays stable across ticks.
 func DetectAttention(capture string) AttentionHint {
 	if capture == "" {
 		return AttentionHint{}
 	}
 	lines := splitPlainLines(capture)
-	joined := strings.Join(lines, "\n")
 
 	for _, m := range attentionMarkers {
-		if !strings.Contains(joined, m.marker) {
+		hitIdx := findMarker(lines, m.marker)
+		if hitIdx < 0 {
 			continue
 		}
-		body := nearestContextAbove(lines, m.marker)
+		if !hasChoiceListNear(lines, hitIdx) {
+			continue
+		}
 		return AttentionHint{
 			Waiting: true,
 			Title:   m.title,
-			Body:    body,
+			Body:    nearestContextAboveAt(lines, hitIdx),
 			Source:  "capture",
 		}
 	}
@@ -66,18 +77,47 @@ var attentionMarkers = []attentionMarker{
 	{marker: "(y/n)", title: "Input needed"},
 }
 
-// nearestContextAbove walks up from the line containing marker and
-// returns the first non-empty line it finds. That line is almost
-// always the tool-use description (e.g. `Web Search("...")`), which
-// gives the user enough context to decide without leaving mosaic.
-func nearestContextAbove(lines []string, marker string) string {
-	hitIdx := -1
+// choiceListWindow is how many lines after the marker we look for a
+// numbered choice. Claude Code's prompt UI puts the first choice on
+// the very next non-empty line, so 6 is generous enough to absorb a
+// blank line or two of padding without letting unrelated text two
+// paragraphs down qualify.
+const choiceListWindow = 6
+
+// numberedChoice matches a line that starts with an optional cursor
+// glyph (`›`, `❯`, `>`) and then `1.`. We only require choice "1"
+// because `2.`/`3.` are not always present (some prompts are
+// 2-option), and a single line of this exact shape is already a
+// near-zero-false-positive signal in real captures.
+var numberedChoice = regexp.MustCompile(`^\s*[›❯>]?\s*1\.\s+\S`)
+
+func findMarker(lines []string, marker string) int {
 	for i, l := range lines {
 		if strings.Contains(l, marker) {
-			hitIdx = i
-			break
+			return i
 		}
 	}
+	return -1
+}
+
+func hasChoiceListNear(lines []string, hitIdx int) bool {
+	end := hitIdx + 1 + choiceListWindow
+	if end > len(lines) {
+		end = len(lines)
+	}
+	for i := hitIdx + 1; i < end; i++ {
+		if numberedChoice.MatchString(lines[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+// nearestContextAboveAt walks up from hitIdx and returns the first
+// non-empty line it finds. That line is almost always the tool-use
+// description (e.g. `Web Search("...")`), which gives the user enough
+// context to decide without leaving mosaic.
+func nearestContextAboveAt(lines []string, hitIdx int) string {
 	if hitIdx <= 0 {
 		return ""
 	}
