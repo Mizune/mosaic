@@ -613,6 +613,33 @@ func (s *SessionService) GetByName(ctx context.Context, name string) (store.Sess
 	return s.store.Sessions().GetByName(ctx, name)
 }
 
+// ResolveSession picks a session by name when supplied, otherwise
+// falls back to a session ID. Commands that may run inside a
+// mosaic-spawned tmux pane use this to honour the explicit
+// positional name first and the MOSAIC_WORKTREE_ID env var second.
+//
+// Both arguments may be empty; when neither resolves to a session
+// the caller gets an error explaining how to disambiguate.
+func (s *SessionService) ResolveSession(ctx context.Context, name, fallbackID string) (store.Session, error) {
+	if name != "" {
+		row, err := s.store.Sessions().GetByName(ctx, name)
+		if err != nil {
+			return store.Session{}, fmt.Errorf("session %q: %w", name, err)
+		}
+		return row, nil
+	}
+	if fallbackID != "" {
+		row, err := s.store.Sessions().GetByID(ctx, fallbackID)
+		if err != nil {
+			return store.Session{}, fmt.Errorf(
+				"resolve session by id %s: %w", fallbackID, err)
+		}
+		return row, nil
+	}
+	return store.Session{}, errors.New(
+		"no session specified — pass <name> or run from inside a mosaic pane (sets MOSAIC_WORKTREE_ID)")
+}
+
 // flagsFor returns the configured launch flags for the given
 // tool, or the zero value (no extra flags) when the user has
 // not added a [mosaic.tools.<tool>] section to their config.
@@ -650,6 +677,12 @@ func (s *SessionService) hookEnv(row store.Session) map[string]string {
 	}
 }
 
+// defaultDiffBase is the fallback ref every diff helper uses when
+// SessionServiceConfig.DiffBaseBranch is empty. Centralising it keeps
+// the three callers (Diff / DiffFile / DiffCommand) from drifting
+// apart silently.
+const defaultDiffBase = "main"
+
 // DiffResult carries the file-level summary the Diff View shows in
 // its left pane.
 type DiffResult struct {
@@ -675,7 +708,7 @@ func (s *SessionService) Diff(ctx context.Context, name string) (DiffResult, err
 	}
 	base := s.Cfg.DiffBaseBranch
 	if base == "" {
-		base = "main"
+		base = defaultDiffBase
 	}
 	files, err := s.git.DiffAgainst(ctx, row.WorktreePath, base)
 	if err != nil {
@@ -689,6 +722,35 @@ func (s *SessionService) Diff(ctx context.Context, name string) (DiffResult, err
 	return DiffResult{Session: row, BaseRef: base, Files: files}, nil
 }
 
+// DiffCommand returns a `git diff` command pre-configured to compare
+// the session's worktree against its resolved diff base. The caller
+// owns wiring stdin/stdout/stderr (and calling Run) so the existing
+// streaming `mosaic diff` UX — git's own TTY-aware color/pager
+// handling — stays in the command layer where exec plumbing lives.
+//
+// When staged is true the command runs `git diff --cached <base>`;
+// otherwise it compares the resolved base directly to the working
+// tree, surfacing both committed and uncommitted changes.
+func (s *SessionService) DiffCommand(ctx context.Context, sess store.Session, staged bool) (*exec.Cmd, error) {
+	base := s.Cfg.DiffBaseBranch
+	if base == "" {
+		base = defaultDiffBase
+	}
+	resolved, err := s.git.ResolveDiffBase(ctx, sess.WorktreePath, base)
+	if err != nil {
+		return nil, fmt.Errorf("resolve diff base: %w", err)
+	}
+	args := []string{"diff"}
+	if staged {
+		args = append(args, "--cached")
+	}
+	args = append(args, resolved)
+	// Going through git.Client.Cmd keeps Client.Binary honored — a
+	// custom git executable set on the client applies to the
+	// streaming diff path too, not just the captured-output helpers.
+	return s.git.Cmd(ctx, sess.WorktreePath, args...), nil
+}
+
 // DiffFile returns the unified diff for one file in a session's
 // worktree. Untracked files are rendered via [git.Client.ShowFile]
 // so the caller gets a consistent unified-diff-shaped blob to
@@ -700,7 +762,7 @@ func (s *SessionService) DiffFile(ctx context.Context, name, path string, untrac
 	}
 	base := s.Cfg.DiffBaseBranch
 	if base == "" {
-		base = "main"
+		base = defaultDiffBase
 	}
 	if untracked {
 		return s.git.ShowFile(ctx, row.WorktreePath, path)

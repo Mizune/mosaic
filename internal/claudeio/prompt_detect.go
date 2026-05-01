@@ -21,33 +21,49 @@ type AttentionHint struct {
 // they need the user to choose an action. It is a pure function so
 // it is trivial to unit-test and easy to extend with new markers.
 //
-// The detector recognises:
+// The detector recognises Claude Code's three known prompt phrasings,
+// all of which present the same numbered-option UI:
 //
-//   - "Do you want to proceed?" — Claude's default tool approval
-//     dialog ("1. Yes  2. Yes, and don't ask again  3. No").
+//   - "Do you want to proceed?" — default tool approval dialog
+//     ("1. Yes  2. Yes, and don't ask again  3. No").
 //   - "Permission required" — alternative phrasing used by
 //     permission-prompt hooks.
-//   - "Approve?" / "Continue? (y/n)" — common fallback prompts.
+//   - "Do you want to continue?" / "Approve this …" — fallback
+//     phrasings that share the same option list shape.
 //
-// When multiple markers are present, the first match wins so the
-// returned Title stays stable across ticks.
+// To avoid false positives on assistant message text that happens to
+// contain a marker phrase (e.g. an answer that quotes "Permission
+// required"), every marker hit must be corroborated by an actual
+// prompt-UI shape near the marker line. Today that means a numbered-
+// choice line ("1. ...", optionally led by `›` or `❯`) within a
+// short window after the marker. The choice list is the most stable
+// signal: it appears in every Claude Code prompt variant we have
+// seen and is essentially never present in narrative output.
+//
+// When multiple markers are present, the first corroborated match
+// wins so the returned Title stays stable across ticks.
 func DetectAttention(capture string) AttentionHint {
 	if capture == "" {
 		return AttentionHint{}
 	}
 	lines := splitPlainLines(capture)
-	joined := strings.Join(lines, "\n")
 
 	for _, m := range attentionMarkers {
-		if !strings.Contains(joined, m.marker) {
-			continue
-		}
-		body := nearestContextAbove(lines, m.marker)
-		return AttentionHint{
-			Waiting: true,
-			Title:   m.title,
-			Body:    body,
-			Source:  "capture",
+		// Scan every occurrence of the marker, not just the first:
+		// narrative text earlier in the capture can quote a marker
+		// phrase without being a real prompt, and we must not let
+		// that uncorroborated hit shadow a genuine prompt further
+		// down the buffer.
+		for _, hitIdx := range findMarkerAll(lines, m.marker) {
+			if !hasChoiceListNear(lines, hitIdx) {
+				continue
+			}
+			return AttentionHint{
+				Waiting: true,
+				Title:   m.title,
+				Body:    nearestContextAboveAt(lines, hitIdx),
+				Source:  "capture",
+			}
 		}
 	}
 	return AttentionHint{}
@@ -58,26 +74,84 @@ type attentionMarker struct {
 	title  string
 }
 
+// attentionMarkers is the canonical list of phrases that, when paired
+// with a numbered choice list nearby, identify a real Claude Code
+// permission prompt. The previous "(y/n)" entry was dropped because
+// hasChoiceListNear unconditionally requires an option list and a
+// bare y/n input never has one — keeping the marker would have been
+// dead code that suggested coverage we don't actually provide.
 var attentionMarkers = []attentionMarker{
 	{marker: "Do you want to proceed?", title: "Permission required"},
 	{marker: "Permission required", title: "Permission required"},
 	{marker: "Do you want to continue?", title: "Confirmation needed"},
 	{marker: "Approve this", title: "Approval needed"},
-	{marker: "(y/n)", title: "Input needed"},
 }
 
-// nearestContextAbove walks up from the line containing marker and
-// returns the first non-empty line it finds. That line is almost
-// always the tool-use description (e.g. `Web Search("...")`), which
-// gives the user enough context to decide without leaving mosaic.
-func nearestContextAbove(lines []string, marker string) string {
-	hitIdx := -1
+// choiceListWindow is how many lines after the marker we look for a
+// numbered choice. Claude Code's prompt UI puts the first choice on
+// the very next non-empty line, so 6 is generous enough to absorb a
+// blank line or two of padding without letting unrelated text two
+// paragraphs down qualify.
+const choiceListWindow = 6
+
+// numberedChoice1 / numberedChoice2 corroborate a permission-prompt
+// hit by matching the first two numbered options Claude Code always
+// renders ("1. ..." then "2. ..."). Requiring both — not just `1.` —
+// rules out incidental text where a marker phrase is followed by a
+// markdown-style "1. Foo" enumeration. Every real Claude Code prompt
+// has at least Yes/No, so two numbered lines are guaranteed; an
+// optional cursor glyph (`›`, `❯`, `>`) precedes the first option on
+// some renders.
+var (
+	numberedChoice1 = regexp.MustCompile(`^\s*[›❯>]?\s*1\.\s+\S`)
+	numberedChoice2 = regexp.MustCompile(`^\s*[›❯>]?\s*2\.\s+\S`)
+)
+
+// findMarkerAll returns every line index whose text contains marker,
+// in top-to-bottom order. Returning all hits — not just the first —
+// lets the caller keep looking when an early occurrence fails the
+// choice-list corroboration check, so a real prompt below an earlier
+// narrative mention is still detected.
+func findMarkerAll(lines []string, marker string) []int {
+	var hits []int
 	for i, l := range lines {
 		if strings.Contains(l, marker) {
-			hitIdx = i
+			hits = append(hits, i)
+		}
+	}
+	return hits
+}
+
+// hasChoiceListNear reports whether the choiceListWindow lines
+// immediately following hitIdx contain BOTH `1.` and `2.` numbered
+// options. This is the corroborating signal that distinguishes a real
+// Claude Code prompt from narrative text that happens to contain a
+// marker phrase — "Permission required: 1. Foo" alone no longer
+// qualifies, but a genuine "1. Yes / 2. No" option list still does.
+func hasChoiceListNear(lines []string, hitIdx int) bool {
+	end := hitIdx + 1 + choiceListWindow
+	if end > len(lines) {
+		end = len(lines)
+	}
+	var sawOne, sawTwo bool
+	for i := hitIdx + 1; i < end; i++ {
+		if !sawOne && numberedChoice1.MatchString(lines[i]) {
+			sawOne = true
+			continue
+		}
+		if sawOne && numberedChoice2.MatchString(lines[i]) {
+			sawTwo = true
 			break
 		}
 	}
+	return sawOne && sawTwo
+}
+
+// nearestContextAboveAt walks up from hitIdx and returns the first
+// non-empty line it finds. That line is almost always the tool-use
+// description (e.g. `Web Search("...")`), which gives the user enough
+// context to decide without leaving mosaic.
+func nearestContextAboveAt(lines []string, hitIdx int) string {
 	if hitIdx <= 0 {
 		return ""
 	}
