@@ -42,7 +42,7 @@ type a message below.
 }
 
 func TestDetectAttention_StripsANSI(t *testing.T) {
-	capture := "\x1b[1;31mDo you want to proceed?\x1b[0m\n› 1. Yes"
+	capture := "\x1b[1;31mDo you want to proceed?\x1b[0m\n› 1. Yes\n  2. No"
 	got := claudeio.DetectAttention(capture)
 	if !got.Waiting {
 		t.Errorf("ANSI-wrapped marker should still match")
@@ -71,6 +71,13 @@ just a label, the agent does not actually need approval here.`,
 		`...applyAttentionHint sets attention_state to waiting_input
 when the capture matches one of: Do you want to proceed?,
 Permission required, (y/n).`,
+		// Marker followed by a single "1. ..." item that is just
+		// markdown enumeration, not a Claude Code option list. The
+		// tightened corroboration requires a "2. ..." line to follow,
+		// so a lone "1." cannot fake the prompt shape.
+		`Permission required appears in:
+  1. The default tool-approval dialog.
+That's it.`,
 	}
 	for i, capture := range cases {
 		got := claudeio.DetectAttention(capture)

@@ -94,12 +94,18 @@ var attentionMarkers = []attentionMarker{
 // paragraphs down qualify.
 const choiceListWindow = 6
 
-// numberedChoice matches a line that starts with an optional cursor
-// glyph (`›`, `❯`, `>`) and then `1.`. We only require choice "1"
-// because `2.`/`3.` are not always present (some prompts are
-// 2-option), and a single line of this exact shape is already a
-// near-zero-false-positive signal in real captures.
-var numberedChoice = regexp.MustCompile(`^\s*[›❯>]?\s*1\.\s+\S`)
+// numberedChoice1 / numberedChoice2 corroborate a permission-prompt
+// hit by matching the first two numbered options Claude Code always
+// renders ("1. ..." then "2. ..."). Requiring both — not just `1.` —
+// rules out incidental text where a marker phrase is followed by a
+// markdown-style "1. Foo" enumeration. Every real Claude Code prompt
+// has at least Yes/No, so two numbered lines are guaranteed; an
+// optional cursor glyph (`›`, `❯`, `>`) precedes the first option on
+// some renders.
+var (
+	numberedChoice1 = regexp.MustCompile(`^\s*[›❯>]?\s*1\.\s+\S`)
+	numberedChoice2 = regexp.MustCompile(`^\s*[›❯>]?\s*2\.\s+\S`)
+)
 
 // findMarkerAll returns every line index whose text contains marker,
 // in top-to-bottom order. Returning all hits — not just the first —
@@ -116,21 +122,29 @@ func findMarkerAll(lines []string, marker string) []int {
 	return hits
 }
 
-// hasChoiceListNear reports whether any of the choiceListWindow lines
-// immediately following hitIdx looks like a Claude Code numbered
-// choice. This is the corroborating signal that distinguishes a real
-// prompt from narrative text that happens to contain a marker phrase.
+// hasChoiceListNear reports whether the choiceListWindow lines
+// immediately following hitIdx contain BOTH `1.` and `2.` numbered
+// options. This is the corroborating signal that distinguishes a real
+// Claude Code prompt from narrative text that happens to contain a
+// marker phrase — "Permission required: 1. Foo" alone no longer
+// qualifies, but a genuine "1. Yes / 2. No" option list still does.
 func hasChoiceListNear(lines []string, hitIdx int) bool {
 	end := hitIdx + 1 + choiceListWindow
 	if end > len(lines) {
 		end = len(lines)
 	}
+	var sawOne, sawTwo bool
 	for i := hitIdx + 1; i < end; i++ {
-		if numberedChoice.MatchString(lines[i]) {
-			return true
+		if !sawOne && numberedChoice1.MatchString(lines[i]) {
+			sawOne = true
+			continue
+		}
+		if sawOne && numberedChoice2.MatchString(lines[i]) {
+			sawTwo = true
+			break
 		}
 	}
-	return false
+	return sawOne && sawTwo
 }
 
 // nearestContextAboveAt walks up from hitIdx and returns the first
