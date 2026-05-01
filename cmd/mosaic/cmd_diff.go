@@ -1,16 +1,9 @@
 package main
 
 import (
-	"context"
-	"errors"
-	"fmt"
 	"os"
-	"os/exec"
 
 	"github.com/spf13/cobra"
-
-	"github.com/Mizune/mosaic/internal/git"
-	"github.com/Mizune/mosaic/internal/store"
 )
 
 // newDiffCmd builds `mosaic diff [<name>]`. It is a thin wrapper
@@ -55,35 +48,20 @@ matches what you'd get from running git diff yourself.`,
 			}
 			defer rt.Close()
 
-			row, err := resolveDiffSession(cmd.Context(), rt, args)
+			var name string
+			if len(args) == 1 {
+				name = args[0]
+			}
+			row, err := rt.sessions.ResolveSession(
+				cmd.Context(), name, os.Getenv("MOSAIC_WORKTREE_ID"))
 			if err != nil {
 				return err
 			}
 
-			gc := git.New()
-			base := rt.config.Worktree.DefaultBaseBranch
-			if base == "" {
-				base = "main"
+			child, err := rt.sessions.DiffCommand(cmd.Context(), row, staged)
+			if err != nil {
+				return err
 			}
-			resolved, rerr := gc.ResolveDiffBase(cmd.Context(),
-				row.WorktreePath, base)
-			if rerr != nil {
-				return fmt.Errorf("resolve diff base: %w", rerr)
-			}
-
-			// `git diff <base>` (no `..`/`...`) compares the
-			// resolved base directly to the working tree, so
-			// uncommitted edits the agent just made show up
-			// alongside any branch commits. `--cached` switches
-			// to staged-only when the user wants to preview
-			// what would be committed next.
-			gitArgs := []string{"-C", row.WorktreePath, "diff"}
-			if staged {
-				gitArgs = append(gitArgs, "--cached")
-			}
-			gitArgs = append(gitArgs, resolved)
-
-			child := exec.CommandContext(cmd.Context(), "git", gitArgs...)
 			child.Stdin = os.Stdin
 			child.Stdout = cmd.OutOrStdout()
 			child.Stderr = cmd.ErrOrStderr()
@@ -94,28 +72,4 @@ matches what you'd get from running git diff yourself.`,
 		"Show only staged changes (git diff --cached) instead of working-tree diff")
 	addRuntimeFlags(cmd, &opts)
 	return cmd
-}
-
-// resolveDiffSession picks the session a `mosaic diff` invocation
-// should target. The lookup is intentionally permissive: most users
-// will run the command from inside a pane mosaic spawned, so the env
-// var path is the common case.
-func resolveDiffSession(ctx context.Context, rt *runtime, args []string) (store.Session, error) {
-	if len(args) == 1 {
-		row, err := rt.store.Sessions().GetByName(ctx, args[0])
-		if err != nil {
-			return store.Session{}, fmt.Errorf("session %q: %w", args[0], err)
-		}
-		return row, nil
-	}
-	if id := os.Getenv("MOSAIC_WORKTREE_ID"); id != "" {
-		row, err := rt.store.Sessions().GetByID(ctx, id)
-		if err != nil {
-			return store.Session{}, fmt.Errorf(
-				"resolve session from MOSAIC_WORKTREE_ID=%s: %w", id, err)
-		}
-		return row, nil
-	}
-	return store.Session{}, errors.New(
-		"no session specified — pass <name> or run from inside a mosaic pane (sets MOSAIC_WORKTREE_ID)")
 }
