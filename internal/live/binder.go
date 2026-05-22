@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Mizune/mosaic/internal/claudeio"
+	"github.com/Mizune/mosaic/internal/codexio"
 	"github.com/Mizune/mosaic/internal/store"
 	"github.com/Mizune/mosaic/pkg/transcript"
 )
@@ -92,6 +93,10 @@ func (b *Binder) sweep(ctx context.Context) error {
 		return err
 	}
 	for _, s := range rows {
+		if store.SessionTool(s.Tool) == store.ToolCodex {
+			b.sweepCodex(ctx, s)
+			continue
+		}
 		// Always ask the filesystem what the latest Claude session
 		// id for this worktree is. Sticking with a stale binding —
 		// which is what happens when the user `/exit`s Claude and
@@ -135,6 +140,23 @@ func (b *Binder) sweep(ctx context.Context) error {
 		b.startWatchOnce(s.WorktreePath, latest)
 	}
 	return nil
+}
+
+func (b *Binder) sweepCodex(ctx context.Context, s store.Session) {
+	earliest := s.CreatedAt.Add(-30 * time.Second)
+	meta, ok := codexio.FindLatestSession(b.home, s.WorktreePath, earliest)
+	if !ok {
+		return
+	}
+	if s.AgentSessionID.Valid && s.AgentSessionID.String == meta.ID {
+		b.markBound(s.ID, meta.ID)
+		return
+	}
+	if err := b.store.Sessions().BindAgentSession(ctx, s.ID, store.ToolCodex, meta.ID, meta.Path, meta.CLIVersion); err != nil {
+		b.log.Warn("bind codex", "session", s.Name, "err", err)
+		return
+	}
+	b.markBound(s.ID, meta.ID)
 }
 
 // discover walks ~/.claude/projects/<sanitized(worktreePath)>/ and

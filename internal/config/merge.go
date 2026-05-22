@@ -61,6 +61,9 @@ func mergeDocker(base, ov DockerSection) DockerSection {
 	if ov.MountClaude != nil {
 		out.MountClaude = ov.MountClaude
 	}
+	if ov.MountCodex != nil {
+		out.MountCodex = ov.MountCodex
+	}
 	if ov.MountGh != nil {
 		out.MountGh = ov.MountGh
 	}
@@ -133,6 +136,68 @@ func mergeMosaic(base, ov MosaicSection) MosaicSection {
 	}
 	if ov.DisableUpdateCheck {
 		out.DisableUpdateCheck = true
+	}
+	out.Tools = mergeTools(base.Tools, ov.Tools)
+	return out
+}
+
+func mergeTools(base, ov map[string]ToolLaunchFlags) map[string]ToolLaunchFlags {
+	if base == nil && ov == nil {
+		return nil
+	}
+	out := make(map[string]ToolLaunchFlags, len(base)+len(ov))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range ov {
+		out[k] = mergeToolLaunchFlags(out[k], v)
+	}
+	return out
+}
+
+func mergeToolLaunchFlags(base, ov ToolLaunchFlags) ToolLaunchFlags {
+	out := base
+	if ov.BypassPermissions {
+		out.BypassPermissions = true
+	}
+	if ov.AutoMode {
+		out.AutoMode = true
+	}
+	if ov.AutoContinue {
+		out.AutoContinue = true
+	}
+	if len(ov.ExtraArgs) > 0 {
+		out.ExtraArgs = append([]string(nil), ov.ExtraArgs...)
+	}
+	if ov.Model != "" {
+		out.Model = ov.Model
+	}
+	if ov.Profile != "" {
+		out.Profile = ov.Profile
+	}
+	if ov.ProfileV2 != "" {
+		out.ProfileV2 = ov.ProfileV2
+	}
+	if ov.Sandbox != "" {
+		out.Sandbox = ov.Sandbox
+	}
+	if ov.ApprovalPolicy != "" {
+		out.ApprovalPolicy = ov.ApprovalPolicy
+	}
+	if ov.LocalProvider != "" {
+		out.LocalProvider = ov.LocalProvider
+	}
+	if ov.WebSearch {
+		out.WebSearch = true
+	}
+	if ov.OSS {
+		out.OSS = true
+	}
+	if ov.NoAltScreen {
+		out.NoAltScreen = true
+	}
+	if ov.BypassCodexSandbox {
+		out.BypassCodexSandbox = true
 	}
 	return out
 }

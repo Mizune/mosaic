@@ -461,6 +461,13 @@ func (s *SessionService) doRespawn(ctx context.Context, row store.Session) error
 	tool := store.SessionTool(row.Tool)
 	const respawn = true
 	launchArgv := LaunchArgvForSession(tool, row.WorktreePath, s.flagsFor(tool), respawn)
+	if tool == store.ToolCodex {
+		sessionID := ""
+		if row.AgentSessionID.Valid {
+			sessionID = row.AgentSessionID.String
+		}
+		launchArgv = LaunchArgvForCodexResume(sessionID, s.flagsFor(tool))
+	}
 
 	// Respawn reuses whatever sandbox mode the row was originally
 	// created with so the user's "pick up where I left off"

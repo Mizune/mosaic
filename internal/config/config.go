@@ -129,6 +129,19 @@ type ToolLaunchFlags struct {
 	// appended after the standard ones. Use this for things
 	// mosaic does not yet model (e.g. `--model opus-4`).
 	ExtraArgs []string `toml:"extra_args"`
+
+	// Codex-specific launch flags. They map to current Codex CLI
+	// options and are ignored by other tools.
+	Model              string `toml:"model"`
+	Profile            string `toml:"profile"`
+	ProfileV2          string `toml:"profile_v2"`
+	Sandbox            string `toml:"sandbox"`
+	ApprovalPolicy     string `toml:"approval_policy"`
+	LocalProvider      string `toml:"local_provider"`
+	WebSearch          bool   `toml:"web_search"`
+	OSS                bool   `toml:"oss"`
+	NoAltScreen        bool   `toml:"no_alt_screen"`
+	BypassCodexSandbox bool   `toml:"bypass_approvals_and_sandbox"`
 }
 
 // UISection holds the [ui] table.
@@ -308,6 +321,11 @@ type DockerSection struct {
 	// to the consumption site.
 	MountClaude *bool `toml:"mount_claude"`
 
+	// MountCodex bind-mounts ~/.codex into the container read-only
+	// so Codex authentication, config, and history are available in
+	// Docker-backed sessions. Defaults to true.
+	MountCodex *bool `toml:"mount_codex"`
+
 	// MountGh bind-mounts ~/.config/gh read-only so `gh` and
 	// session hooks that shell out to gh (PR creation, etc.) work
 	// without a fresh `gh auth login`. Defaults to true.
@@ -423,6 +441,7 @@ func Default() Config {
 			// override can set e.g. mount_ssh = false to opt out
 			// without also having to pin every other field.
 			MountClaude: BoolPtr(true),
+			MountCodex:  BoolPtr(true),
 			MountGh:     BoolPtr(true),
 			MountSSH:    BoolPtr(true),
 			AutoCleanup: BoolPtr(true),

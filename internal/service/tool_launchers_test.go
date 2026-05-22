@@ -40,10 +40,39 @@ func TestLaunchCommandForSession_AppendsConfiguredFlags(t *testing.T) {
 	}
 }
 
-func TestLaunchCommandForSession_NoFlagsForOtherTools(t *testing.T) {
+func TestLaunchCommandForSession_ClaudeFlagsDoNotAffectCodex(t *testing.T) {
 	flags := config.ToolLaunchFlags{BypassPermissions: true, AutoMode: true}
 	if got := service.LaunchCommandForSession(store.ToolCodex, "", flags, false); got != "codex" {
 		t.Errorf("got %q, want codex (bypass/auto are claude-only)", got)
+	}
+}
+
+func TestLaunchCommandForSession_CodexFlags(t *testing.T) {
+	flags := config.ToolLaunchFlags{
+		Model:          "gpt-5-codex",
+		Sandbox:        "workspace-write",
+		ApprovalPolicy: "on-request",
+		WebSearch:      true,
+		NoAltScreen:    true,
+		ExtraArgs:      []string{"--strict-config"},
+	}
+	got := service.LaunchCommandForSession(store.ToolCodex, "", flags, false)
+	want := "codex --model gpt-5-codex --sandbox workspace-write --ask-for-approval on-request --search --no-alt-screen --strict-config"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestLaunchArgvForCodexResume_UsesBoundSessionID(t *testing.T) {
+	got := service.LaunchArgvForCodexResume("sess-123", config.ToolLaunchFlags{Model: "gpt-5-codex"})
+	want := []string{"codex", "resume", "--model", "gpt-5-codex", "sess-123"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
 	}
 }
 

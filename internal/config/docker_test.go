@@ -15,6 +15,7 @@ var _ = Describe("DockerSection", func() {
 		It("enables auth mounts and auto_cleanup by default", func() {
 			d := config.Default().Docker
 			Expect(config.BoolOr(d.MountClaude, false)).To(BeTrue())
+			Expect(config.BoolOr(d.MountCodex, false)).To(BeTrue())
 			Expect(config.BoolOr(d.MountGh, false)).To(BeTrue())
 			Expect(config.BoolOr(d.MountSSH, false)).To(BeTrue())
 			Expect(config.BoolOr(d.AutoCleanup, false)).To(BeTrue())
@@ -51,10 +52,11 @@ firewall_allowlist = ["api.github.com", "api.anthropic.com"]
 			Expect(d.DefaultMounts).To(Equal([]string{"~/work:/work:ro"}))
 			// Explicit mount_ssh = false wins over the default; the
 			// other toggles are not in the override so they inherit
-			// the defaults (MountClaude/MountGh/AutoCleanup = true).
+			// the defaults (MountClaude/MountCodex/MountGh/AutoCleanup = true).
 			Expect(d.MountSSH).NotTo(BeNil())
 			Expect(*d.MountSSH).To(BeFalse())
 			Expect(config.BoolOr(d.MountClaude, false)).To(BeTrue())
+			Expect(config.BoolOr(d.MountCodex, false)).To(BeTrue())
 			Expect(config.BoolOr(d.MountGh, false)).To(BeTrue())
 			Expect(config.BoolOr(d.AutoCleanup, false)).To(BeTrue())
 			Expect(d.FirewallAllowlist).To(ConsistOf("api.github.com", "api.anthropic.com"))
@@ -70,6 +72,7 @@ default_tool = "claude"
 
 			d := res.Config.Docker
 			Expect(config.BoolOr(d.MountClaude, false)).To(BeTrue())
+			Expect(config.BoolOr(d.MountCodex, false)).To(BeTrue())
 			Expect(config.BoolOr(d.MountGh, false)).To(BeTrue())
 			Expect(config.BoolOr(d.MountSSH, false)).To(BeTrue())
 			Expect(config.BoolOr(d.AutoCleanup, false)).To(BeTrue())
@@ -90,6 +93,7 @@ mount_ssh = false
 			Expect(d.MountSSH).NotTo(BeNil())
 			Expect(*d.MountSSH).To(BeFalse())
 			Expect(config.BoolOr(d.MountClaude, false)).To(BeTrue())
+			Expect(config.BoolOr(d.MountCodex, false)).To(BeTrue())
 			Expect(config.BoolOr(d.MountGh, false)).To(BeTrue())
 			Expect(config.BoolOr(d.AutoCleanup, false)).To(BeTrue())
 		})

@@ -102,6 +102,7 @@ func ContainerName(sessionID string) string {
 // in one package.
 const (
 	ClaudeMountTarget = "/home/mosaic/.claude"
+	CodexMountTarget  = "/home/mosaic/.codex"
 	GhMountTarget     = "/home/mosaic/.config/gh"
 	SSHMountTarget    = "/home/mosaic/.ssh"
 )

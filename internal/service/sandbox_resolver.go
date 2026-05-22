@@ -110,6 +110,13 @@ func buildMounts(d config.DockerSection) []sandbox.Mount {
 			ReadOnly:  true,
 		})
 	}
+	if config.BoolOr(d.MountCodex, true) && home != "" {
+		mounts = append(mounts, sandbox.Mount{
+			Host:      filepath.Join(home, ".codex"),
+			Container: sandbox.CodexMountTarget,
+			ReadOnly:  true,
+		})
+	}
 	if config.BoolOr(d.MountGh, true) && home != "" {
 		mounts = append(mounts, sandbox.Mount{
 			Host:      filepath.Join(home, ".config", "gh"),

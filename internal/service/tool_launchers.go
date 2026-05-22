@@ -96,7 +96,27 @@ func LaunchArgvForSession(tool store.SessionTool, worktreePath string, flags con
 			parts = append(parts, "--continue")
 		}
 	}
+	if tool == store.ToolCodex && (respawn || flags.AutoContinue) {
+		parts = append(parts, "resume", "--last")
+	}
 	parts = append(parts, claudeFlagArgs(tool, flags)...)
+	parts = append(parts, codexFlagArgs(tool, flags)...)
+	if len(flags.ExtraArgs) > 0 {
+		parts = append(parts, flags.ExtraArgs...)
+	}
+	return parts
+}
+
+// LaunchArgvForCodexResume builds a Codex resume command for an
+// already-bound Codex session. Empty sessionID falls back to --last.
+func LaunchArgvForCodexResume(sessionID string, flags config.ToolLaunchFlags) []string {
+	parts := []string{"codex", "resume"}
+	parts = append(parts, codexFlagArgs(store.ToolCodex, flags)...)
+	if sessionID != "" {
+		parts = append(parts, sessionID)
+	} else {
+		parts = append(parts, "--last")
+	}
 	if len(flags.ExtraArgs) > 0 {
 		parts = append(parts, flags.ExtraArgs...)
 	}
@@ -122,6 +142,44 @@ func claudeFlagArgs(tool store.SessionTool, flags config.ToolLaunchFlags) []stri
 		// users on older Claude builds can swap to the right
 		// one via ExtraArgs.
 		out = append(out, "--auto")
+	}
+	return out
+}
+
+func codexFlagArgs(tool store.SessionTool, flags config.ToolLaunchFlags) []string {
+	if tool != store.ToolCodex {
+		return nil
+	}
+	var out []string
+	if flags.Model != "" {
+		out = append(out, "--model", flags.Model)
+	}
+	if flags.Profile != "" {
+		out = append(out, "--profile", flags.Profile)
+	}
+	if flags.ProfileV2 != "" {
+		out = append(out, "--profile-v2", flags.ProfileV2)
+	}
+	if flags.Sandbox != "" {
+		out = append(out, "--sandbox", flags.Sandbox)
+	}
+	if flags.ApprovalPolicy != "" {
+		out = append(out, "--ask-for-approval", flags.ApprovalPolicy)
+	}
+	if flags.OSS {
+		out = append(out, "--oss")
+	}
+	if flags.LocalProvider != "" {
+		out = append(out, "--local-provider", flags.LocalProvider)
+	}
+	if flags.WebSearch {
+		out = append(out, "--search")
+	}
+	if flags.NoAltScreen {
+		out = append(out, "--no-alt-screen")
+	}
+	if flags.BypassCodexSandbox {
+		out = append(out, "--dangerously-bypass-approvals-and-sandbox")
 	}
 	return out
 }
