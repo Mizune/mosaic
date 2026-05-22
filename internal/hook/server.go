@@ -261,9 +261,9 @@ func parseMessage(body []byte) (any, bool) {
 			TabID:      tab,
 			SurfaceID:  surface,
 			Agent:      fourth,
-			Title:      payload.Title,
-			Body:       firstNonEmpty(payload.Message, payload.LastAssistantMessage),
-			Event:      payload.HookEventName,
+			Title:      firstNonEmpty(payload.Title, payload.Event),
+			Body:       firstNonEmpty(payload.Message, firstNonEmpty(payload.LastAssistantMessage, payload.Reason)),
+			Event:      firstNonEmpty(payload.HookEventName, payload.Event),
 		}, true
 	}
 	return nil, false
@@ -273,8 +273,10 @@ func parseMessage(body []byte) (any, bool) {
 // hook payload schema.
 type notificationPayload struct {
 	HookEventName        string `json:"hook_event_name"`
+	Event                string `json:"event"`
 	Title                string `json:"title"`
 	Message              string `json:"message"`
+	Reason               string `json:"reason"`
 	LastAssistantMessage string `json:"last_assistant_message"`
 }
 

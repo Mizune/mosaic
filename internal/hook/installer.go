@@ -79,6 +79,9 @@ const (
 	EventSessionStart       EventName = "SessionStart"
 	EventSessionEnd         EventName = "SessionEnd"
 	EventNotification       EventName = "Notification"
+	EventPermissionRequest  EventName = "PermissionRequest"
+	EventPreToolUse         EventName = "PreToolUse"
+	EventPostToolUse        EventName = "PostToolUse"
 )
 
 // MosaicHookSet is the canonical set of hooks mosaic installs. Tests
@@ -90,6 +93,17 @@ func MosaicHookSet() map[EventName]string {
 		EventPostToolUseFailure: BusyCommand(false),
 		EventSessionEnd:         BusyCommand(false),
 		EventNotification:       NotificationCommand("claude"),
+	}
+}
+
+// CodexHookSet is the canonical hook set for Codex CLI hooks.json.
+func CodexHookSet() map[EventName]string {
+	return map[EventName]string{
+		EventUserPromptSubmit:  BusyCommand(true),
+		EventPreToolUse:        BusyCommand(true),
+		EventPostToolUse:       BusyCommand(false),
+		EventStop:              BusyCommand(false),
+		EventPermissionRequest: NotificationCommand("codex"),
 	}
 }
 
@@ -134,6 +148,23 @@ func (i *Installer) IsInstalled() (bool, error) {
 // idempotent: re-running it after a successful install does not
 // duplicate entries.
 func (i *Installer) Install() error {
+	return i.InstallSet(MosaicHookSet())
+}
+
+// InstallSet merges a caller-supplied hook set into the target config.
+func (i *Installer) InstallSet(set map[EventName]string) error {
+	return i.installSet(set, true, false)
+}
+
+// InstallSetSync installs hook commands without the Claude-only async
+// field. Codex currently warns and skips async hooks, so its installer
+// path uses this variant and replaces any older mosaic-owned async
+// entries in the target file.
+func (i *Installer) InstallSetSync(set map[EventName]string) error {
+	return i.installSet(set, false, true)
+}
+
+func (i *Installer) installSet(set map[EventName]string, async, replace bool) error {
 	doc, err := i.load()
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -141,9 +172,12 @@ func (i *Installer) Install() error {
 	if doc == nil {
 		doc = newDoc()
 	}
+	if replace {
+		doc.stripMosaic()
+	}
 
-	for event, command := range MosaicHookSet() {
-		doc.addCommand(string(event), command)
+	for event, command := range set {
+		doc.addCommand(string(event), command, async)
 	}
 	return i.save(doc)
 }
@@ -236,7 +270,7 @@ func parseGroup(raw map[string]any) hookGroup {
 // addCommand inserts (or no-ops) a mosaic command on the given event.
 // If a mosaic-owned command already exists, the call is a no-op so
 // repeated installs are idempotent.
-func (d *doc) addCommand(event, command string) {
+func (d *doc) addCommand(event, command string, async bool) {
 	hooks, ok := d.raw["hooks"].(map[string]any)
 	if !ok {
 		hooks = map[string]any{}
@@ -259,15 +293,14 @@ func (d *doc) addCommand(event, command string) {
 		}
 	}
 
-	groups = append(groups, map[string]any{
-		"hooks": []any{
-			map[string]any{
-				"type":    "command",
-				"command": command,
-				"async":   true,
-			},
-		},
-	})
+	entry := map[string]any{
+		"type":    "command",
+		"command": command,
+	}
+	if async {
+		entry["async"] = true
+	}
+	groups = append(groups, map[string]any{"hooks": []any{entry}})
 	hooks[event] = groups
 }
 

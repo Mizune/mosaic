@@ -92,6 +92,33 @@ func TestInstall_Idempotent(t *testing.T) {
 	}
 }
 
+func TestInstallSet_CodexHooks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hooks.json")
+	inst := hook.NewInstaller(path)
+
+	if err := inst.InstallSetSync(hook.CodexHookSet()); err != nil {
+		t.Fatalf("install codex: %v", err)
+	}
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	bodyStr := string(body)
+	for _, event := range []string{"PermissionRequest", "PreToolUse", "PostToolUse", "Stop", "UserPromptSubmit"} {
+		if !strings.Contains(bodyStr, event) {
+			t.Fatalf("expected Codex event %q in hooks file:\n%s", event, bodyStr)
+		}
+	}
+	if !strings.Contains(bodyStr, "codex") {
+		t.Fatalf("expected codex notification command:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, `"async"`) {
+		t.Fatalf("codex hooks must not include async:\n%s", bodyStr)
+	}
+}
+
 // countCommandEntries counts how many JSON command entries in the
 // settings file are mosaic-owned (i.e. have the marker env var in
 // their command string).

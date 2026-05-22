@@ -85,10 +85,17 @@ detection, declarative worktree setup, and a built-in conductor.`,
 			// skip), so this check evaluates to false on every
 			// subsequent launch.
 			if _, err := os.Stat(rt.paths.FirstRunMarker); os.IsNotExist(err) {
-				home, _ := os.UserHomeDir()
+				home := opts.home
+				if home == "" {
+					home, _ = os.UserHomeDir()
+				}
 				var settingsPath string
 				if home != "" {
-					settingsPath = filepath.Join(home, ".claude", "settings.json")
+					if rt.config.Mosaic.DefaultTool == "codex" {
+						settingsPath = filepath.Join(home, ".codex", "hooks.json")
+					} else {
+						settingsPath = filepath.Join(home, ".claude", "settings.json")
+					}
 				}
 				model.ShowFirstRunWizard(rt.paths.FirstRunMarker, settingsPath)
 			}

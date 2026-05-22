@@ -10,6 +10,9 @@ import "strings"
 // blocking so we err on the side of surfacing attention rather
 // than hiding it.
 func IsBlockingNotification(ev NotificationEvent) bool {
+	if ev.Event == string(EventPermissionRequest) {
+		return true
+	}
 	text := strings.ToLower(ev.Title + " " + ev.Body)
 	// Idle cues Claude Code emits after Stop — these should
 	// never be treated as attention.

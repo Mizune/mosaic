@@ -3,6 +3,7 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -42,8 +43,10 @@ func TestFirstRunWizard_WritesMarkerOnFinish(t *testing.T) {
 	if m.firstRun.themeApplied == "" {
 		t.Error("theme should have been applied")
 	}
-	// Hooks: select "No, install later" (cursor = 1).
-	m.firstRun.hookCursor = 1
+	// Hooks: install nothing, then continue.
+	m.firstRun.installClaudeHook = false
+	m.firstRun.installCodexHook = false
+	m.firstRun.hookCursor = 2
 	m.updateFirstRunWizard(enter)
 	if m.firstRun.step != firstRunStepDone {
 		t.Fatalf("step = %v, want done", m.firstRun.step)
@@ -57,6 +60,74 @@ func TestFirstRunWizard_WritesMarkerOnFinish(t *testing.T) {
 	// Marker file must exist now.
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatalf("marker file not created: %v", err)
+	}
+}
+
+func userHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	return home
+}
+
+func TestFirstRunWizard_InstallsCodexHooksWhenDefaultToolIsCodex(t *testing.T) {
+	m := setupModel(t)
+	m.config.Mosaic.DefaultTool = "codex"
+	dir := t.TempDir()
+	marker := filepath.Join(dir, ".first-run-done")
+	settings := filepath.Join(dir, "hooks.json")
+
+	m.ShowFirstRunWizard(marker, settings)
+	m.firstRun.installClaudeHook = false
+	m.firstRun.installCodexHook = true
+
+	enter := tea.KeyMsg{Type: tea.KeyEnter}
+	m.updateFirstRunWizard(enter) // welcome
+	m.updateFirstRunWizard(enter) // theme
+	m.updateFirstRunWizard(enter) // hooks: default yes
+
+	body, err := os.ReadFile(settings)
+	if err != nil {
+		t.Fatalf("codex hooks file not written: %v", err)
+	}
+	if !strings.Contains(string(body), "PermissionRequest") {
+		t.Fatalf("expected Codex hook set, got:\n%s", string(body))
+	}
+}
+
+func TestFirstRunWizard_CanInstallBothHookSets(t *testing.T) {
+	m := setupModel(t)
+	m.config.Mosaic.DefaultTool = "claude"
+	dir := t.TempDir()
+	home := userHome(t)
+	marker := filepath.Join(dir, ".first-run-done")
+	claudeSettings := filepath.Join(dir, "settings.json")
+
+	m.ShowFirstRunWizard(marker, claudeSettings)
+	m.firstRun.installClaudeHook = true
+
+	enter := tea.KeyMsg{Type: tea.KeyEnter}
+	m.updateFirstRunWizard(enter) // welcome
+	m.updateFirstRunWizard(enter) // theme
+	m.updateFirstRunWizard(tea.KeyMsg{Type: tea.KeyDown})
+	m.firstRun.installCodexHook = true
+	m.updateFirstRunWizard(enter) // hooks
+
+	claudeBody, err := os.ReadFile(claudeSettings)
+	if err != nil {
+		t.Fatalf("claude hooks file not written: %v", err)
+	}
+	if !strings.Contains(string(claudeBody), "Notification") {
+		t.Fatalf("expected Claude hook set, got:\n%s", string(claudeBody))
+	}
+
+	codexPath := firstRunHookPath(home, "codex")
+	codexBody, err := os.ReadFile(codexPath)
+	if err != nil {
+		t.Fatalf("codex hooks file not written: %v", err)
+	}
+	if !strings.Contains(string(codexBody), "PermissionRequest") {
+		t.Fatalf("expected Codex hook set, got:\n%s", string(codexBody))
 	}
 }
 

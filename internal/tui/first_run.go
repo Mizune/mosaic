@@ -2,6 +2,7 @@ package tui
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -39,14 +40,19 @@ type firstRunState struct {
 	themeApplied string // name that the wizard committed
 
 	// Hooks step.
-	hookCursor int // 0 = yes, 1 = no
-	hookDone   bool
+	hookCursor        int // 0 = claude, 1 = codex, 2 = continue
+	installClaudeHook bool
+	installCodexHook  bool
+	claudeHookDone    bool
+	codexHookDone     bool
+	claudeCLIFound    bool
+	codexCLIFound     bool
 
 	// Where the wizard writes its "done" marker.
 	markerPath string
 
-	// Where the hook installer targets (typically
-	// ~/.claude/settings.json). Optional override for tests.
+	// Where the hook installer targets. Optional override for tests;
+	// when set, it is used for the default-tool hook path only.
 	settingsPath string
 
 	// Error text from the most recent side effect (hook install,
@@ -58,12 +64,18 @@ type firstRunState struct {
 // screen to ScreenFirstRun. cmd_root calls this during TUI
 // startup when the first-run marker file does not exist yet.
 func (m *Model) ShowFirstRunWizard(markerPath, settingsPath string) {
+	claudeFound := commandExists("claude")
+	codexFound := commandExists("codex")
 	m.firstRun = firstRunState{
-		active:       true,
-		step:         firstRunStepWelcome,
-		themes:       theme.Available(),
-		markerPath:   markerPath,
-		settingsPath: settingsPath,
+		active:            true,
+		step:              firstRunStepWelcome,
+		themes:            theme.Available(),
+		installClaudeHook: claudeFound,
+		installCodexHook:  codexFound,
+		claudeCLIFound:    claudeFound,
+		codexCLIFound:     codexFound,
+		markerPath:        markerPath,
+		settingsPath:      settingsPath,
 	}
 	// Highlight the user's currently configured theme so the
 	// cursor starts on the obvious default.
@@ -133,8 +145,21 @@ func (m *Model) updateFirstRunWizard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case firstRunStepHooks:
 		switch msg.String() {
-		case "j", "down", "k", "up":
-			f.hookCursor = 1 - f.hookCursor
+		case "j", "down":
+			if f.hookCursor < 2 {
+				f.hookCursor++
+			}
+		case "k", "up":
+			if f.hookCursor > 0 {
+				f.hookCursor--
+			}
+		case " ":
+			switch f.hookCursor {
+			case 0:
+				f.installClaudeHook = !f.installClaudeHook
+			case 1:
+				f.installCodexHook = !f.installCodexHook
+			}
 		}
 	}
 	return m, nil
@@ -168,21 +193,19 @@ func (m *Model) advanceFirstRunStep() tea.Cmd {
 		return nil
 
 	case firstRunStepHooks:
-		if f.hookCursor == 0 {
-			path := f.settingsPath
-			if path == "" {
-				if home, _ := os.UserHomeDir(); home != "" {
-					path = filepath.Join(home, ".claude", "settings.json")
-				}
+		if f.installClaudeHook {
+			if err := m.installFirstRunHook("claude"); err != nil {
+				f.err = "Claude hook install failed: " + err.Error()
+				return nil
 			}
-			if path != "" {
-				inst := hook.NewInstaller(path)
-				if err := inst.Install(); err != nil {
-					f.err = "hook install failed: " + err.Error()
-					return nil
-				}
-				f.hookDone = true
+			f.claudeHookDone = true
+		}
+		if f.installCodexHook {
+			if err := m.installFirstRunHook("codex"); err != nil {
+				f.err = "Codex hook install failed: " + err.Error()
+				return nil
 			}
+			f.codexHookDone = true
 		}
 		f.step = firstRunStepDone
 		return m.refreshCmd()
@@ -248,7 +271,7 @@ func (m *Model) renderFirstRunWelcome() string {
 		"Let's set up your workspace in 2 quick steps:",
 		"",
 		"  1. Pick a colour theme",
-		"  2. (Recommended) Install Claude Code hooks",
+		"  2. (Recommended) Choose agent hooks to install",
 		"",
 		m.theme.MutedText.Render("Enter to start, Esc to skip and use the defaults."),
 	}
@@ -334,29 +357,44 @@ func (m *Model) renderFirstRunTheme() string {
 
 func (m *Model) renderFirstRunHooks() string {
 	f := m.firstRun
-	options := []string{
-		"Yes, install hooks now (recommended)",
-		"No, I'll install them later with `mosaic hook install`",
+	rows := []struct {
+		label   string
+		checked bool
+	}{
+		{"Claude Code hooks  (~/.claude/settings.json)" + cliFoundSuffix(f.claudeCLIFound), f.installClaudeHook},
+		{"Codex hooks        (~/.codex/hooks.json)" + cliFoundSuffix(f.codexCLIFound), f.installCodexHook},
+		{"Continue", false},
 	}
 	lines := []string{
-		m.theme.SectionTitle.Render("Step 2/2: Claude Code hooks"),
+		m.theme.SectionTitle.Render("Step 2/2: Agent hooks"),
 		"",
 		"Hooks give mosaic sub-second updates on:",
 		"  · which agent is waiting for your input",
 		"  · when a session becomes busy / idle",
 		"  · notification events (permission prompts)",
 		"",
-		"Without hooks, mosaic still works via fsnotify tailing",
-		"and OSC capture, just with ~100-200ms extra latency.",
+		"Select any tools you plan to use. You can install both.",
+		"",
+		m.theme.MutedText.Render("Space: toggle   Enter: install selected / continue"),
 		"",
 	}
-	for i, opt := range options {
+	for i, row := range rows {
 		marker := "  "
 		if i == f.hookCursor {
 			marker = m.theme.AttentionTag.Render("▶ ")
 		}
-		lines = append(lines, marker+opt)
+		if i < 2 {
+			box := "[ ] "
+			if row.checked {
+				box = "[x] "
+			}
+			lines = append(lines, marker+box+row.label)
+		} else {
+			lines = append(lines, marker+row.label)
+		}
 	}
+	lines = append(lines, "",
+		m.theme.MutedText.Render("Later: `mosaic hook install --tool claude` / `mosaic hook install --tool codex`"))
 	return strings.Join(lines, "\n")
 }
 
@@ -371,14 +409,69 @@ func (m *Model) renderFirstRunDone() string {
 	if f.themeApplied != "" {
 		lines = append(lines, "  theme:    "+f.themeApplied)
 	}
-	if f.hookDone {
-		lines = append(lines, "  hooks:    installed")
+	var hooks []string
+	if f.claudeHookDone {
+		hooks = append(hooks, "Claude Code")
+	}
+	if f.codexHookDone {
+		hooks = append(hooks, "Codex")
+	}
+	if len(hooks) > 0 {
+		lines = append(lines, "  hooks:    installed ("+strings.Join(hooks, ", ")+")")
 	} else {
 		lines = append(lines, "  hooks:    skipped")
 	}
 	lines = append(lines, "",
 		m.theme.MutedText.Render("Press Enter to open the TUI."))
 	return strings.Join(lines, "\n")
+}
+
+func firstRunHookPath(home, tool string) string {
+	if tool == "codex" {
+		return filepath.Join(home, ".codex", "hooks.json")
+	}
+	return filepath.Join(home, ".claude", "settings.json")
+}
+
+func firstRunHookSet(tool string) map[hook.EventName]string {
+	if tool == "codex" {
+		return hook.CodexHookSet()
+	}
+	return hook.MosaicHookSet()
+}
+
+func commandExists(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
+}
+
+func cliFoundSuffix(found bool) string {
+	if found {
+		return "  found"
+	}
+	return "  not found"
+}
+
+func (m *Model) installFirstRunHook(tool string) error {
+	path := ""
+	if m.firstRun.settingsPath != "" && (tool == m.config.Mosaic.DefaultTool ||
+		(tool == "codex" && m.firstRun.installCodexHook && !m.firstRun.installClaudeHook) ||
+		(tool == "claude" && m.firstRun.installClaudeHook && !m.firstRun.installCodexHook)) {
+		path = m.firstRun.settingsPath
+	}
+	if path == "" {
+		if home, _ := os.UserHomeDir(); home != "" {
+			path = firstRunHookPath(home, tool)
+		}
+	}
+	if path == "" {
+		return nil
+	}
+	inst := hook.NewInstaller(path)
+	if tool == "codex" {
+		return inst.InstallSetSync(firstRunHookSet(tool))
+	}
+	return inst.InstallSet(firstRunHookSet(tool))
 }
 
 // --- helpers ---------------------------------------------------------------
@@ -396,4 +489,3 @@ func writeFirstRunMarker(path string) error {
 	}
 	return os.WriteFile(path, []byte(""), 0o644)
 }
-

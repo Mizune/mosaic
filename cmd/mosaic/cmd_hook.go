@@ -21,10 +21,11 @@ import (
 // hooks without going through `nc -U`.
 func newHookCmd() *cobra.Command {
 	var settingsPath string
+	var toolName string
 
 	root := &cobra.Command{
 		Use:   "hook",
-		Short: "Manage Claude Code hook integration",
+		Short: "Manage agent hook integration",
 	}
 
 	resolvePath := func() string {
@@ -32,21 +33,39 @@ func newHookCmd() *cobra.Command {
 			return settingsPath
 		}
 		home, _ := os.UserHomeDir()
+		if toolName == "codex" {
+			return filepath.Join(home, ".codex", "hooks.json")
+		}
 		return filepath.Join(home, ".claude", "settings.json")
 	}
 
-	root.PersistentFlags().StringVar(&settingsPath, "settings", "", "Override the path to ~/.claude/settings.json (testing)")
+	hookSet := func() map[hook.EventName]string {
+		if toolName == "codex" {
+			return hook.CodexHookSet()
+		}
+		return hook.MosaicHookSet()
+	}
+
+	root.PersistentFlags().StringVar(&settingsPath, "settings", "", "Override the hook settings path (testing)")
+	root.PersistentFlags().StringVar(&toolName, "tool", "claude", "Agent tool to manage hooks for (claude or codex)")
 
 	root.AddCommand(&cobra.Command{
 		Use:   "install",
 		Short: "Install mosaic hooks into Claude Code's settings.json",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			inst := hook.NewInstaller(resolvePath())
-			if err := inst.Install(); err != nil {
+			set := hookSet()
+			var err error
+			if toolName == "codex" {
+				err = inst.InstallSetSync(set)
+			} else {
+				err = inst.InstallSet(set)
+			}
+			if err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "installed %d mosaic hook commands into %s\n",
-				len(hook.MosaicHookSet()), inst.Path)
+				len(set), inst.Path)
 			return nil
 		},
 	})
