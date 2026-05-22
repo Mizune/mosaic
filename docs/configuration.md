@@ -60,18 +60,28 @@ mosaic doctor --print-config
 ## `[mosaic.tools.<tool>]` — per-tool launch flags
 
 Each agent can have its own flag set appended after the standard
-launcher. Only `claude` honours the typed booleans today — `codex`
-and `gemini` accept `extra_args` only.
+launcher. `claude` and `codex` both have typed options; other tools
+accept `extra_args`.
 
 ```toml
 [mosaic.tools.claude]
 bypass_permissions = true        # adds --dangerously-skip-permissions
 auto_mode          = true        # adds --auto
 extra_args         = ["--model", "opus-4"]
+
+[mosaic.tools.codex]
+model           = "gpt-5-codex"
+sandbox         = "workspace-write"  # read-only | workspace-write | danger-full-access
+approval_policy = "on-request"       # untrusted | on-request | never
+web_search      = true               # adds --search
+no_alt_screen   = true               # adds --no-alt-screen
+auto_continue   = true               # new sessions use `codex resume --last`
+extra_args      = ["--strict-config"]
 ```
 
-mosaic never enables `--dangerously-skip-permissions` implicitly —
-you must opt in via this table.
+mosaic never enables Claude `--dangerously-skip-permissions` or Codex
+`--dangerously-bypass-approvals-and-sandbox` implicitly. You must opt in
+via this table.
 
 ## `[ui]` — TUI appearance and behaviour
 
@@ -172,7 +182,7 @@ project overrides it **list-by-list** — `copy` replaces (use
 `copy_extra` to append), `commands` replaces, `env` merges
 key-by-key.
 
-## `[hooks]` — Claude Code hook integration
+## `[hooks]` — agent hook integration
 
 ```toml
 [hooks]
@@ -180,8 +190,9 @@ suggested = true            # wizard suggests install on first run
 events    = []              # reserved; not wired yet
 ```
 
-Hooks themselves live in `~/.claude/settings.json` and are managed
-by `mosaic hook install` / `uninstall`. See [hooks.md](hooks.md).
+Claude hooks live in `~/.claude/settings.json`; Codex hooks live in
+`~/.codex/hooks.json`. Manage them with `mosaic hook install --tool
+claude` or `mosaic hook install --tool codex`. See [hooks.md](hooks.md).
 
 ## Example `config.toml`
 

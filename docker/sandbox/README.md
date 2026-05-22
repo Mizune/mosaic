@@ -49,6 +49,7 @@ mosaic's wrapper assumes the following paths exist inside the image
 (the entries are the *container* side of the default mounts):
 
 - `/home/mosaic/.claude`
+- `/home/mosaic/.codex`
 - `/home/mosaic/.ssh`
 - `/home/mosaic/.config/gh`
 

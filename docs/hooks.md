@@ -1,11 +1,10 @@
-# Claude Code hooks
+# Agent hooks
 
-mosaic installs a small set of hooks in `~/.claude/settings.json`
-so Claude Code can notify mosaic the moment the agent's state
-changes. With hooks, mosaic sees busy/idle transitions in single
-milliseconds; without them it still works via fsnotify on the
-JSONL transcript (~50ms) and tmux OSC scanning (~1s), just with
-higher latency.
+mosaic installs a small set of hooks so Claude Code or Codex can notify
+mosaic the moment the agent's state changes. With hooks, mosaic sees
+busy/idle transitions in single milliseconds; without them it still
+works via transcript discovery and tmux OSC scanning where available,
+just with higher latency.
 
 Installation is opt-in, idempotent, and only adds entries that
 carry the `MOSAIC_SOCKET_PATH` marker so uninstall never touches
@@ -14,14 +13,15 @@ hooks owned by other tools.
 ## Install / uninstall / status
 
 ```bash
-mosaic hook install    # adds mosaic entries
-mosaic hook status     # ✓ / ✗ indicator
-mosaic hook uninstall  # removes only the mosaic entries
+mosaic hook install                  # Claude: ~/.claude/settings.json
+mosaic hook install --tool codex     # Codex: ~/.codex/hooks.json
+mosaic hook status --tool codex      # ✓ / ✗ indicator
+mosaic hook uninstall --tool codex   # removes only the mosaic entries
 ```
 
 All three commands accept `--settings <path>` to override the
-target file (tests use this). The default is
-`~/.claude/settings.json`.
+target file (tests use this). The default is `~/.claude/settings.json`
+for Claude and `~/.codex/hooks.json` for Codex.
 
 The installer is a transactional JSON merge: it writes to a
 `.tmp` file and renames into place, so a crashed install never
@@ -29,7 +29,7 @@ leaves you with a half-written config.
 
 ## What gets installed
 
-Five events, each wired to a one-liner that sends to mosaic's
+Claude installs five events, each wired to a one-liner that sends to mosaic's
 per-process unix socket via `nc -U`:
 
 | Event | What mosaic does with it |
@@ -39,6 +39,11 @@ per-process unix socket via `nc -U`:
 | `PostToolUseFailure` | same as `Stop` |
 | `SessionEnd` | same as `Stop` |
 | `Notification` | blocking notifications (`permission required`, `approve`, …) flip the session to `⚠ waiting_input` |
+
+Codex installs `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`,
+and `PermissionRequest`. `PermissionRequest` is treated as blocking
+attention; `PreToolUse` marks the session running; `PostToolUse` and
+`Stop` mark it idle.
 
 All of them gate on four environment variables:
 
