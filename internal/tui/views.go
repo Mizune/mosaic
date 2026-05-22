@@ -742,9 +742,14 @@ func (m *Model) renderPreviewStructured(row store.Session, innerHeight, innerWid
 		"status:  " + row.Status,
 	}))
 
-	top = append(top, m.renderSection("Claude", []string{
-		"tool:           " + row.Tool,
-		"claude session: " + ifEmpty(row.ClaudeSessionID.String, "(not bound)"),
+	sessionID := row.AgentSessionID.String
+	if sessionID == "" {
+		sessionID = row.ClaudeSessionID.String
+	}
+	top = append(top, m.renderSection("Agent", []string{
+		"tool:          " + row.Tool,
+		"session:       " + ifEmpty(sessionID, "(not bound)"),
+		"cli version:   " + ifEmpty(row.AgentCLIVersion, "-"),
 	}))
 
 	if subs := m.subagents[row.ID]; len(subs) > 0 {

@@ -52,23 +52,27 @@ const (
 
 // Session is the row representation of a mosaic session.
 type Session struct {
-	ID              string         `db:"id"`
-	Name            string         `db:"name"`
-	ProjectPath     string         `db:"project_path"`
-	WorktreePath    string         `db:"worktree_path"`
-	Branch          sql.NullString `db:"branch"`
-	TmuxSession     string         `db:"tmux_session"`
-	Tool            string         `db:"tool"`
-	Status          string         `db:"status"`
-	ClaudeSessionID sql.NullString `db:"claude_session_id"`
-	ConductorID     sql.NullString `db:"conductor_id"`
-	CreatedAt       time.Time      `db:"created_at"`
-	LastActiveAt    time.Time      `db:"last_active_at"`
-	AttentionState  string         `db:"attention_state"`
-	AttentionTitle  sql.NullString `db:"attention_title"`
-	AttentionBody   sql.NullString `db:"attention_body"`
-	AttentionSince  sql.NullTime   `db:"attention_since"`
-	AttentionSource sql.NullString `db:"attention_source"`
+	ID                 string         `db:"id"`
+	Name               string         `db:"name"`
+	ProjectPath        string         `db:"project_path"`
+	WorktreePath       string         `db:"worktree_path"`
+	Branch             sql.NullString `db:"branch"`
+	TmuxSession        string         `db:"tmux_session"`
+	Tool               string         `db:"tool"`
+	Status             string         `db:"status"`
+	ClaudeSessionID    sql.NullString `db:"claude_session_id"`
+	AgentSessionID     sql.NullString `db:"agent_session_id"`
+	AgentSessionSource string         `db:"agent_session_source"`
+	AgentSessionPath   string         `db:"agent_session_path"`
+	AgentCLIVersion    string         `db:"agent_cli_version"`
+	ConductorID        sql.NullString `db:"conductor_id"`
+	CreatedAt          time.Time      `db:"created_at"`
+	LastActiveAt       time.Time      `db:"last_active_at"`
+	AttentionState     string         `db:"attention_state"`
+	AttentionTitle     sql.NullString `db:"attention_title"`
+	AttentionBody      sql.NullString `db:"attention_body"`
+	AttentionSince     sql.NullTime   `db:"attention_since"`
+	AttentionSource    sql.NullString `db:"attention_source"`
 
 	// SandboxMode records the isolation backend the session was
 	// launched with: "none" (direct host execution) or "docker".
@@ -114,7 +118,9 @@ type NewSession struct {
 // has columns (e.g. legacy_id) that are absent from the Session struct.
 var sessionColumns = strings.Join([]string{
 	"id", "name", "project_path", "worktree_path", "branch",
-	"tmux_session", "tool", "status", "claude_session_id", "conductor_id",
+	"tmux_session", "tool", "status", "claude_session_id",
+	"agent_session_id", "agent_session_source", "agent_session_path", "agent_cli_version",
+	"conductor_id",
 	"created_at", "last_active_at", "attention_state", "attention_title",
 	"attention_body", "attention_since", "attention_source",
 	"sandbox_mode", "sandbox_container",
@@ -277,14 +283,37 @@ func (r *SessionsRepo) SetAttention(
 	return err
 }
 
-// BindClaudeSession associates a Claude Code session id with a
-// mosaic session. This is the repository-layer equivalent of the raw
-// SQL UPDATE that binder.go and tests use to link the two.
-func (r *SessionsRepo) BindClaudeSession(ctx context.Context, id, claudeSessionID string) error {
-	_, err := r.db.ExecContext(ctx,
-		`UPDATE sessions SET claude_session_id = ? WHERE id = ?`,
-		sql.NullString{String: claudeSessionID, Valid: claudeSessionID != ""}, id)
+// BindAgentSession associates an agent runtime's native session id
+// with a mosaic session. Claude writes both the generic fields and the
+// legacy claude_session_id mirror so older integrations keep working.
+func (r *SessionsRepo) BindAgentSession(ctx context.Context, id string, runtime SessionTool, agentSessionID, path, cliVersion string) error {
+	if runtime == "" {
+		runtime = ToolClaude
+	}
+	if runtime == ToolClaude {
+		_, err := r.db.ExecContext(ctx, `
+            UPDATE sessions
+            SET agent_session_id = ?, agent_session_source = ?,
+                agent_session_path = ?, agent_cli_version = ?,
+                claude_session_id = ?
+            WHERE id = ?`,
+			nullString(agentSessionID), string(runtime), path, cliVersion,
+			nullString(agentSessionID), id)
+		return err
+	}
+	_, err := r.db.ExecContext(ctx, `
+        UPDATE sessions
+        SET agent_session_id = ?, agent_session_source = ?,
+            agent_session_path = ?, agent_cli_version = ?
+        WHERE id = ?`,
+		nullString(agentSessionID), string(runtime), path, cliVersion, id)
 	return err
+}
+
+// BindClaudeSession associates a Claude Code session id with a mosaic
+// session. Deprecated: use BindAgentSession for new integrations.
+func (r *SessionsRepo) BindClaudeSession(ctx context.Context, id, claudeSessionID string) error {
+	return r.BindAgentSession(ctx, id, ToolClaude, claudeSessionID, "", "")
 }
 
 // Delete removes a session row.

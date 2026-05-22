@@ -123,6 +123,42 @@ var _ = Describe("SessionsRepo", func() {
 		})
 	})
 
+	Describe("BindAgentSession", func() {
+		It("binds Codex metadata without touching the Claude mirror", func() {
+			created, err := s.Sessions().Insert(ctx, store.NewSession{
+				Name: "codex", WorktreePath: "/tmp/codex", Tool: store.ToolCodex,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(s.Sessions().BindAgentSession(ctx, created.ID, store.ToolCodex,
+				"codex-sess", "/tmp/rollout.jsonl", "0.133.0")).To(Succeed())
+
+			got, err := s.Sessions().GetByID(ctx, created.ID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got.AgentSessionID.Valid).To(BeTrue())
+			Expect(got.AgentSessionID.String).To(Equal("codex-sess"))
+			Expect(got.AgentSessionSource).To(Equal("codex"))
+			Expect(got.AgentSessionPath).To(Equal("/tmp/rollout.jsonl"))
+			Expect(got.AgentCLIVersion).To(Equal("0.133.0"))
+			Expect(got.ClaudeSessionID.Valid).To(BeFalse())
+		})
+
+		It("keeps the Claude compatibility column in sync", func() {
+			created, err := s.Sessions().Insert(ctx, store.NewSession{
+				Name: "claude", WorktreePath: "/tmp/claude",
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(s.Sessions().BindClaudeSession(ctx, created.ID, "claude-sess")).To(Succeed())
+
+			got, err := s.Sessions().GetByID(ctx, created.ID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got.AgentSessionID.String).To(Equal("claude-sess"))
+			Expect(got.AgentSessionSource).To(Equal("claude"))
+			Expect(got.ClaudeSessionID.String).To(Equal("claude-sess"))
+		})
+	})
+
 	Describe("Delete", func() {
 		It("removes the row", func() {
 			created, err := s.Sessions().Insert(ctx, store.NewSession{

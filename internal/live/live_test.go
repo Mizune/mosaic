@@ -210,7 +210,7 @@ func TestReconciler_TranscriptEntryUpdatesSubagentTool(t *testing.T) {
 		ProjectPath: "/tmp/p",
 		SessionID:   "claude-sess",
 		AgentID:     "deadbeef",
-		Entry: buildToolUseEntry("id1", "Read"),
+		Entry:       buildToolUseEntry("id1", "Read"),
 	})
 
 	deadline := time.Now().Add(time.Second)

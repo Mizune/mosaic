@@ -13,9 +13,9 @@ import (
 type NotificationSource string
 
 const (
-	NotificationSourceHook NotificationSource = "hook"
+	NotificationSourceHook  NotificationSource = "hook"
 	NotificationSourceJSONL NotificationSource = "jsonl"
-	NotificationSourceOSC  NotificationSource = "osc"
+	NotificationSourceOSC   NotificationSource = "osc"
 )
 
 // Notification is the row type for the notifications table.

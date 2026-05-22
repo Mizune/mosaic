@@ -34,6 +34,8 @@ type Subagent struct {
 	ID                   string         `db:"id"`
 	ParentSessionID      string         `db:"parent_session_id"`
 	ClaudeSessionID      string         `db:"claude_session_id"`
+	AgentSessionID       string         `db:"agent_session_id"`
+	AgentRuntime         string         `db:"agent_runtime"`
 	AgentID              string         `db:"agent_id"`
 	SubagentType         string         `db:"subagent_type"`
 	Name                 sql.NullString `db:"name"`
@@ -66,6 +68,8 @@ func (s Subagent) LabelParts() (hasType bool, typ, name, desc string) {
 type NewSubagent struct {
 	ParentSessionID string
 	ClaudeSessionID string
+	AgentSessionID  string
+	AgentRuntime    string
 	AgentID         string
 	SubagentType    string
 	Name            string
@@ -82,6 +86,15 @@ type SubagentsRepo struct {
 var ErrSubagentNotFound = errors.New("subagent not found")
 
 func newSubagentsRepo(db *sqlx.DB) *SubagentsRepo { return &SubagentsRepo{db: db} }
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
 
 // Upsert inserts a sub-agent if it does not exist, otherwise returns
 // the existing row. Sub-agents are uniquely identified by the
@@ -107,6 +120,8 @@ func (r *SubagentsRepo) Upsert(ctx context.Context, in NewSubagent) (Subagent, e
 		ID:              id,
 		ParentSessionID: in.ParentSessionID,
 		ClaudeSessionID: in.ClaudeSessionID,
+		AgentSessionID:  firstNonEmpty(in.AgentSessionID, in.ClaudeSessionID),
+		AgentRuntime:    firstNonEmpty(in.AgentRuntime, string(ToolClaude)),
 		AgentID:         in.AgentID,
 		SubagentType:    in.SubagentType,
 		Name:            sql.NullString{String: in.Name, Valid: in.Name != ""},
@@ -117,10 +132,12 @@ func (r *SubagentsRepo) Upsert(ctx context.Context, in NewSubagent) (Subagent, e
 	}
 	_, err = r.db.NamedExecContext(ctx, `
         INSERT INTO subagents (
-            id, parent_session_id, claude_session_id, agent_id, subagent_type,
+            id, parent_session_id, claude_session_id, agent_session_id, agent_runtime,
+            agent_id, subagent_type,
             name, description, status, started_at, transcript_path
         ) VALUES (
-            :id, :parent_session_id, :claude_session_id, :agent_id, :subagent_type,
+            :id, :parent_session_id, :claude_session_id, :agent_session_id, :agent_runtime,
+            :agent_id, :subagent_type,
             :name, :description, :status, :started_at, :transcript_path
         )`, row)
 	if err != nil {
