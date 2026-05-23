@@ -21,6 +21,7 @@ import (
 type skillPanelState struct {
 	sessionID   string
 	sessionName string
+	tool        string
 	skills      []skill.Skill
 	attached    map[string]bool
 	cursor      int
@@ -43,11 +44,12 @@ func (m *Model) openSkillManager() {
 	panel := skillPanelState{
 		sessionID:   row.Session.ID,
 		sessionName: row.Session.Name,
+		tool:        row.Session.Tool,
 	}
 
 	home, _ := os.UserHomeDir()
 	if home != "" {
-		skills, err := skill.Discover(filepath.Join(home, ".claude", "skills"))
+		skills, err := discoverSkillsForSession(home, row.Session.Tool, row.Session.WorktreePath)
 		if err != nil {
 			panel.loadErr = err.Error()
 		} else {
@@ -142,7 +144,7 @@ func (m *Model) renderSkillPanel() string {
 		return m.renderMCPBox(title + "\n\n" + body)
 	}
 	if len(p.skills) == 0 {
-		body := m.theme.MutedText.Render("No skills discovered in ~/.claude/skills/.") +
+		body := m.theme.MutedText.Render(emptySkillMessage(p.tool)) +
 			"\n\n" + m.theme.MutedText.Render("q / Esc to return")
 		return m.renderMCPBox(title + "\n\n" + body)
 	}
@@ -199,7 +201,28 @@ func (m *Model) renderSkillDetail(s skill.Skill, attached map[string]bool) strin
 		lines = append(lines, "", wrapText(s.Description, 60))
 	}
 	lines = append(lines, "", m.theme.MutedText.Render("source: "+s.Path))
+	if s.Root != "" {
+		lines = append(lines, m.theme.MutedText.Render("root:   "+s.Root))
+	}
 	return strings.Join(lines, "\n")
+}
+
+func discoverSkillsForSession(home, tool, worktreePath string) ([]skill.Skill, error) {
+	if tool == "codex" {
+		return skill.DiscoverMany(
+			skill.Root{Path: filepath.Join(worktreePath, ".agents", "skills")},
+			skill.Root{Path: filepath.Join(home, ".agents", "skills")},
+			skill.Root{Path: filepath.Join(home, ".codex", "skills")},
+		)
+	}
+	return skill.Discover(filepath.Join(home, ".claude", "skills"))
+}
+
+func emptySkillMessage(tool string) string {
+	if tool == "codex" {
+		return "No skills discovered in <worktree>/.agents/skills, ~/.agents/skills, or ~/.codex/skills."
+	}
+	return "No skills discovered in ~/.claude/skills/."
 }
 
 // wrapText is a minimal word wrapper for the Skill detail column.
