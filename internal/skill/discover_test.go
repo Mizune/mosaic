@@ -128,3 +128,59 @@ description: real
 		t.Fatalf("expected only 'real', got %+v", got)
 	}
 }
+
+func TestDiscoverMany_UsesRootPrecedence(t *testing.T) {
+	project := t.TempDir()
+	user := t.TempDir()
+	codex := t.TempDir()
+
+	seedSkill(t, user, "shared", `---
+name: shared
+description: user copy
+---`)
+	seedSkill(t, project, "shared", `---
+name: shared
+description: project copy
+---`)
+	seedSkill(t, codex, "codex-only", `---
+name: codex-only
+description: codex copy
+---`)
+
+	got, err := skill.DiscoverMany(
+		skill.Root{Path: project, Label: "project"},
+		skill.Root{Path: user, Label: "user"},
+		skill.Root{Path: codex, Label: "codex"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2, got %+v", got)
+	}
+	if got[0].Name != "codex-only" || got[1].Name != "shared" {
+		t.Fatalf("unexpected order: %+v", got)
+	}
+	if got[1].Description != "project copy" || got[1].Root != "project" {
+		t.Fatalf("project root should win: %+v", got[1])
+	}
+}
+
+func TestDiscoverMany_MissingRootsIgnored(t *testing.T) {
+	root := t.TempDir()
+	seedSkill(t, root, "real", `---
+name: real
+description: real
+---`)
+
+	got, err := skill.DiscoverMany(
+		skill.Root{Path: filepath.Join(t.TempDir(), "missing")},
+		skill.Root{Path: root},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Name != "real" {
+		t.Fatalf("unexpected: %+v", got)
+	}
+}
