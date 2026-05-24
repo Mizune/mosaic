@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/Mizune/mosaic/internal/config"
 	"github.com/Mizune/mosaic/internal/sandbox"
 	"github.com/Mizune/mosaic/internal/service"
 	"github.com/Mizune/mosaic/internal/store"
@@ -78,6 +79,15 @@ type wizardState struct {
 	claudeBypassPermissions bool
 	claudeContinue          bool
 
+	// Codex-specific launch mode toggles. Like the Claude options,
+	// these are one-shot overrides for the session being created.
+	codexContinue      bool
+	codexWebSearch     bool
+	codexNoAltScreen   bool
+	codexBypassSandbox bool
+	codexSandboxIndex  int
+	codexApprovalIndex int
+
 	// Sandbox step state. dockerAvailable is computed once when
 	// the wizard opens so we do not re-probe $PATH on every
 	// re-render. sandboxMode is the user's selection; sandboxImage
@@ -88,6 +98,9 @@ type wizardState struct {
 	sandboxImageEdit bool // true when the image field accepts keystrokes
 	dockerAvailable  bool
 }
+
+var codexSandboxChoices = []string{"", "read-only", "workspace-write", "danger-full-access"}
+var codexApprovalChoices = []string{"", "on-request", "never", "untrusted"}
 
 // registeredProject is the wizard-facing view of one project entry.
 // We precompute the resolved absolute path so the render and the
@@ -440,21 +453,45 @@ func (m *Model) updateWizard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				w.cursor--
 			}
 		case " ":
-			// Space toggles auto-mode when cursor is on claude.
-			if w.cursor >= 0 && w.cursor < len(w.toolChoice) && w.toolChoice[w.cursor] == "claude" {
+			tool := wizardSelectedTool(w)
+			if tool == "claude" {
 				w.claudeAutoMode = !w.claudeAutoMode
+			} else if tool == "codex" {
+				w.codexWebSearch = !w.codexWebSearch
 			}
 			return m, nil
 		case "b":
 			// b toggles bypass permissions when cursor is on claude.
-			if w.cursor >= 0 && w.cursor < len(w.toolChoice) && w.toolChoice[w.cursor] == "claude" {
+			if wizardSelectedTool(w) == "claude" {
 				w.claudeBypassPermissions = !w.claudeBypassPermissions
 			}
 			return m, nil
 		case "r":
-			// r toggles --continue (resume) when cursor is on claude.
-			if w.cursor >= 0 && w.cursor < len(w.toolChoice) && w.toolChoice[w.cursor] == "claude" {
+			tool := wizardSelectedTool(w)
+			if tool == "claude" {
 				w.claudeContinue = !w.claudeContinue
+			} else if tool == "codex" {
+				w.codexContinue = !w.codexContinue
+			}
+			return m, nil
+		case "a":
+			if wizardSelectedTool(w) == "codex" {
+				w.codexApprovalIndex = (w.codexApprovalIndex + 1) % len(codexApprovalChoices)
+			}
+			return m, nil
+		case "s":
+			if wizardSelectedTool(w) == "codex" {
+				w.codexSandboxIndex = (w.codexSandboxIndex + 1) % len(codexSandboxChoices)
+			}
+			return m, nil
+		case "n":
+			if wizardSelectedTool(w) == "codex" {
+				w.codexNoAltScreen = !w.codexNoAltScreen
+			}
+			return m, nil
+		case "!":
+			if wizardSelectedTool(w) == "codex" {
+				w.codexBypassSandbox = !w.codexBypassSandbox
 			}
 			return m, nil
 		default:
@@ -596,30 +633,46 @@ func (m *Model) advanceWizard() (tea.Model, tea.Cmd) {
 func (m *Model) finaliseWizard() (tea.Model, tea.Cmd) {
 	w := &m.wizard
 	input := service.CreateInput{
-		Name:          w.name,
-		ProjectPath:   w.project,
-		WorktreePath:  w.project,
-		Tool:          store.SessionTool(w.tool),
-		Branch:        w.branch,
-		ForceContinue: w.claudeContinue,
-		SandboxMode:   w.sandboxMode,
-		SandboxImage:  strings.TrimSpace(w.sandboxImage),
+		Name:         w.name,
+		ProjectPath:  w.project,
+		WorktreePath: w.project,
+		Tool:         store.SessionTool(w.tool),
+		Branch:       w.branch,
+		SandboxMode:  w.sandboxMode,
+		SandboxImage: strings.TrimSpace(w.sandboxImage),
+	}
+	switch w.tool {
+	case "claude":
+		input.ForceContinue = w.claudeContinue
+		input.ToolFlags = config.ToolLaunchFlags{
+			AutoMode:          w.claudeAutoMode,
+			BypassPermissions: w.claudeBypassPermissions,
+		}
+		input.HasToolFlags = input.ToolFlags.AutoMode || input.ToolFlags.BypassPermissions
+	case "codex":
+		input.ForceContinue = w.codexContinue
+		input.ToolFlags = config.ToolLaunchFlags{
+			WebSearch:          w.codexWebSearch,
+			NoAltScreen:        w.codexNoAltScreen,
+			BypassCodexSandbox: w.codexBypassSandbox,
+		}
+		if w.codexSandboxIndex >= 0 && w.codexSandboxIndex < len(codexSandboxChoices) {
+			input.ToolFlags.Sandbox = codexSandboxChoices[w.codexSandboxIndex]
+		}
+		if w.codexApprovalIndex >= 0 && w.codexApprovalIndex < len(codexApprovalChoices) {
+			input.ToolFlags.ApprovalPolicy = codexApprovalChoices[w.codexApprovalIndex]
+		}
+		input.HasToolFlags = input.ToolFlags.WebSearch ||
+			input.ToolFlags.NoAltScreen ||
+			input.ToolFlags.BypassCodexSandbox ||
+			input.ToolFlags.Sandbox != "" ||
+			input.ToolFlags.ApprovalPolicy != ""
 	}
 	if w.wantWorktree {
 		input.CreateWorktree = true
 		input.WorktreeRepo = w.project
 		input.WorktreePath = filepath.Join(w.project, ".worktrees", w.branch)
 		input.WorktreeSetup = m.config.Worktree.Setup[w.setup]
-	}
-	if w.tool == "claude" && (w.claudeAutoMode || w.claudeBypassPermissions) {
-		parts := []string{"claude"}
-		if w.claudeBypassPermissions {
-			parts = append(parts, "--dangerously-skip-permissions")
-		}
-		if w.claudeAutoMode {
-			parts = append(parts, "--auto")
-		}
-		input.Command = strings.Join(parts, " ")
 	}
 	m.screen = ScreenTop
 	return m, m.runCreate(input)
@@ -635,6 +688,20 @@ func setupChoiceIndex(choices []setupChoice, name string) int {
 		}
 	}
 	return 0
+}
+
+func wizardSelectedTool(w *wizardState) string {
+	if w == nil || w.cursor < 0 || w.cursor >= len(w.toolChoice) {
+		return ""
+	}
+	return w.toolChoice[w.cursor]
+}
+
+func codexChoiceLabel(value string) string {
+	if value == "" {
+		return "config default"
+	}
+	return value
 }
 
 // resolveProjectPath expands a leading "~" and makes the path
@@ -810,8 +877,41 @@ func (m *Model) renderWizard() string {
 					m.theme.MutedText.Render("(b to toggle)"),
 			)
 		}
+		if wizardSelectedTool(&w) == "codex" {
+			continueBox := checkboxOff
+			if w.codexContinue {
+				continueBox = checkboxOn
+			}
+			searchBox := checkboxOff
+			if w.codexWebSearch {
+				searchBox = checkboxOn
+			}
+			inlineBox := checkboxOff
+			if w.codexNoAltScreen {
+				inlineBox = checkboxOn
+			}
+			bypassBox := checkboxOff
+			if w.codexBypassSandbox {
+				bypassBox = checkboxOn
+			}
+			lines = append(lines, "",
+				m.theme.SectionTitle.Render("Codex options"),
+				"  "+continueBox+" resume last session "+
+					m.theme.MutedText.Render("(r to toggle)"),
+				"  "+searchBox+" web search "+
+					m.theme.MutedText.Render("(Space to toggle)"),
+				"  "+inlineBox+" inline terminal "+
+					m.theme.MutedText.Render("(n to toggle)"),
+				"  approval: "+m.theme.AttentionTag.Render(codexChoiceLabel(codexApprovalChoices[w.codexApprovalIndex]))+
+					m.theme.MutedText.Render("  (a to cycle)"),
+				"  sandbox:  "+m.theme.AttentionTag.Render(codexChoiceLabel(codexSandboxChoices[w.codexSandboxIndex]))+
+					m.theme.MutedText.Render("  (s to cycle)"),
+				"  "+bypassBox+" bypass approvals and sandbox "+
+					m.theme.MutedText.Render("(! to toggle)"),
+			)
+		}
 		lines = append(lines, "",
-			m.theme.MutedText.Render("[Enter] next  [j/k] move  [Space] auto  [b] bypass  [Shift+Tab] back"),
+			m.theme.MutedText.Render("[Enter] next  [j/k] move  [Space] toggle  [r] resume  [Shift+Tab] back"),
 		)
 
 	case stepWorktree:

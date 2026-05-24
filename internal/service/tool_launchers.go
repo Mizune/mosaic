@@ -184,6 +184,53 @@ func codexFlagArgs(tool store.SessionTool, flags config.ToolLaunchFlags) []strin
 	return out
 }
 
+func mergeLaunchFlags(base, override config.ToolLaunchFlags) config.ToolLaunchFlags {
+	out := base
+	if override.BypassPermissions {
+		out.BypassPermissions = true
+	}
+	if override.AutoMode {
+		out.AutoMode = true
+	}
+	if override.AutoContinue {
+		out.AutoContinue = true
+	}
+	if len(override.ExtraArgs) > 0 {
+		out.ExtraArgs = append(append([]string(nil), out.ExtraArgs...), override.ExtraArgs...)
+	}
+	if override.Model != "" {
+		out.Model = override.Model
+	}
+	if override.Profile != "" {
+		out.Profile = override.Profile
+	}
+	if override.ProfileV2 != "" {
+		out.ProfileV2 = override.ProfileV2
+	}
+	if override.Sandbox != "" {
+		out.Sandbox = override.Sandbox
+	}
+	if override.ApprovalPolicy != "" {
+		out.ApprovalPolicy = override.ApprovalPolicy
+	}
+	if override.LocalProvider != "" {
+		out.LocalProvider = override.LocalProvider
+	}
+	if override.WebSearch {
+		out.WebSearch = true
+	}
+	if override.OSS {
+		out.OSS = true
+	}
+	if override.NoAltScreen {
+		out.NoAltScreen = true
+	}
+	if override.BypassCodexSandbox {
+		out.BypassCodexSandbox = true
+	}
+	return out
+}
+
 // worktreeHasClaudeTranscript reports whether the Claude Code
 // projects directory for this worktree contains at least one
 // .jsonl file. We do not parse the files — the presence of any

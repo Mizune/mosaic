@@ -23,6 +23,7 @@ type mcpPanelState struct {
 	// was pressed; changing the outer cursor closes + reopens.
 	sessionID   string
 	sessionName string
+	tool        string
 
 	// servers is every MCP discovered on disk, sorted by name.
 	servers []mcp.Server
@@ -60,14 +61,12 @@ func (m *Model) openMCPManager() {
 	panel := mcpPanelState{
 		sessionID:   row.Session.ID,
 		sessionName: row.Session.Name,
+		tool:        row.Session.Tool,
 	}
 
 	home, _ := os.UserHomeDir()
 	if home != "" {
-		servers, err := mcp.Discover(
-			filepath.Join(home, ".claude.json"),
-			filepath.Join(home, ".claude", "settings.json"),
-		)
+		servers, err := discoverMCPsForSession(home, row.Session.Tool, row.Session.WorktreePath)
 		if err != nil {
 			panel.loadErr = err.Error()
 		} else {
@@ -173,7 +172,7 @@ func (m *Model) renderMCPPanel() string {
 		return m.renderMCPBox(title + "\n\n" + body)
 	}
 	if len(p.servers) == 0 {
-		body := m.theme.MutedText.Render("No MCP servers discovered in ~/.claude.json or ~/.claude/settings.json.") +
+		body := m.theme.MutedText.Render(emptyMCPMessage(p.tool)) +
 			"\n\n" + m.theme.MutedText.Render("q / Esc to return")
 		return m.renderMCPBox(title + "\n\n" + body)
 	}
@@ -217,6 +216,26 @@ func (m *Model) renderMCPPanel() string {
 		"j/k: move   space/enter: toggle   q/Esc: close")
 
 	return m.renderMCPBox(title + "\n\n" + cols + "\n\n" + footer)
+}
+
+func discoverMCPsForSession(home, tool, worktreePath string) ([]mcp.Server, error) {
+	if tool == "codex" {
+		return mcp.DiscoverCodex(
+			filepath.Join(home, ".codex", "config.toml"),
+			filepath.Join(worktreePath, ".codex", "config.toml"),
+		)
+	}
+	return mcp.Discover(
+		filepath.Join(home, ".claude.json"),
+		filepath.Join(home, ".claude", "settings.json"),
+	)
+}
+
+func emptyMCPMessage(tool string) string {
+	if tool == "codex" {
+		return "No MCP servers discovered in ~/.codex/config.toml or <worktree>/.codex/config.toml."
+	}
+	return "No MCP servers discovered in ~/.claude.json or ~/.claude/settings.json."
 }
 
 // renderMCPBox wraps body in the shared modal frame. Kept for
@@ -273,4 +292,3 @@ func (m *Model) renderMCPDetail(s mcp.Server, attached map[string]bool) string {
 	lines = append(lines, "", m.theme.MutedText.Render("source: "+s.Source))
 	return strings.Join(lines, "\n")
 }
-

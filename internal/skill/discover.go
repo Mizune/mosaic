@@ -34,6 +34,18 @@ type Skill struct {
 	// Path is the absolute path to the SKILL.md file so the TUI
 	// can "open in editor" as a later enhancement.
 	Path string
+
+	// Root is the skill root that contributed this result. It lets
+	// callers explain precedence when several roots contain the same
+	// skill name.
+	Root string
+}
+
+// Root is one skill discovery root. Label is optional display text;
+// Path is the directory containing one subdirectory per skill.
+type Root struct {
+	Path  string
+	Label string
 }
 
 // Discover walks the skills root and returns every skill with a
@@ -42,6 +54,40 @@ type Skill struct {
 //
 // The returned slice is sorted by name.
 func Discover(root string) ([]Skill, error) {
+	return discoverRoot(root)
+}
+
+// DiscoverMany discovers skills from multiple roots. Earlier roots
+// win on duplicate skill names, so callers should pass higher
+// precedence roots first.
+func DiscoverMany(roots ...Root) ([]Skill, error) {
+	byName := map[string]Skill{}
+	for _, root := range roots {
+		skills, err := discoverRoot(root.Path)
+		if err != nil {
+			return nil, err
+		}
+		label := root.Label
+		if label == "" {
+			label = root.Path
+		}
+		for _, s := range skills {
+			if _, exists := byName[s.Name]; exists {
+				continue
+			}
+			s.Root = label
+			byName[s.Name] = s
+		}
+	}
+	out := make([]Skill, 0, len(byName))
+	for _, s := range byName {
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func discoverRoot(root string) ([]Skill, error) {
 	if root == "" {
 		return nil, nil
 	}
@@ -68,6 +114,7 @@ func Discover(root string) ([]Skill, error) {
 		// purposes (it is what Claude Code actually invokes).
 		s.Name = e.Name()
 		s.Path = skillPath
+		s.Root = root
 		out = append(out, s)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

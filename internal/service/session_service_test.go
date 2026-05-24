@@ -3,6 +3,7 @@ package service_test
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/Mizune/mosaic/internal/bus"
+	"github.com/Mizune/mosaic/internal/config"
 	"github.com/Mizune/mosaic/internal/service"
 	"github.com/Mizune/mosaic/internal/store"
 	"github.com/Mizune/mosaic/internal/tmux"
@@ -162,6 +164,51 @@ var _ = Describe("SessionService", func() {
 			respawned := fk.Sessions()[row.TmuxSession]
 			Expect(respawned.Env).To(HaveKeyWithValue("MOSAIC_SOCKET_PATH", "/tmp/mosaic-test/pid-1234"))
 			Expect(respawned.Env).To(HaveKeyWithValue("MOSAIC_WORKTREE_ID", row.ID))
+		})
+	})
+
+	Describe("Codex launch preparation", func() {
+		It("applies attached MCPs and skills on respawn without rewriting user config", func() {
+			svc.Cfg.ToolFlags = map[string]config.ToolLaunchFlags{
+				"codex": {
+					Sandbox:        "workspace-write",
+					ApprovalPolicy: "on-request",
+				},
+			}
+			worktree := GinkgoT().TempDir()
+			Expect(os.MkdirAll(filepath.Join(worktree, ".codex"), 0o755)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(worktree, ".codex", "config.toml"), []byte(`
+[mcp_servers.project]
+command = "echo"
+args = ["hello"]
+type = "stdio"
+`), 0o644)).To(Succeed())
+
+			row, err := svc.Create(ctx, service.CreateInput{
+				Name:         "codex-prep",
+				WorktreePath: worktree,
+				Tool:         store.ToolCodex,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(st.SessionMCPs().Attach(ctx, row.ID, "project")).To(Succeed())
+			Expect(st.SessionSkills().Attach(ctx, row.ID, "review")).To(Succeed())
+			Expect(fk.Kill(ctx, row.TmuxSession)).To(Succeed())
+
+			_, err = svc.AttachCommand(ctx, "codex-prep")
+			Expect(err).NotTo(HaveOccurred())
+
+			respawned := fk.Sessions()[row.TmuxSession]
+			Expect(respawned.Argv).To(Equal([]string{
+				"codex", "resume",
+				"-c", `mcp_servers."project".command="echo"`,
+				"-c", `mcp_servers."project".args=["hello"]`,
+				"-c", `mcp_servers."project".type="stdio"`,
+				"-c", `skills."review".enabled=true`,
+				"--sandbox", "workspace-write",
+				"--ask-for-approval", "on-request",
+				"--last",
+			}))
 		})
 	})
 

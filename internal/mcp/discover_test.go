@@ -143,3 +143,75 @@ func TestDiscover_MalformedEntrySkipped(t *testing.T) {
 		t.Fatalf("want only the ok entry, got %+v", servers)
 	}
 }
+
+func TestDiscoverCodex_ParsesToml(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(`
+[mcp_servers.github]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+type = "stdio"
+
+[mcp_servers.github.env]
+GITHUB_PERSONAL_ACCESS_TOKEN = "super-secret-value"
+
+[mcp_servers.local]
+command = "/usr/local/bin/local-mcp"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	servers, err := mcp.DiscoverCodex(path)
+	if err != nil {
+		t.Fatalf("DiscoverCodex: %v", err)
+	}
+	if len(servers) != 2 {
+		t.Fatalf("want 2 servers, got %d", len(servers))
+	}
+	if servers[0].Name != "github" || servers[1].Name != "local" {
+		t.Fatalf("unexpected order: %+v", servers)
+	}
+	gh := servers[0]
+	if gh.Command != "npx" || len(gh.Args) != 2 || gh.Type != "stdio" {
+		t.Fatalf("github mismatch: %+v", gh)
+	}
+	if len(gh.EnvKeys) != 1 || gh.EnvKeys[0] != "GITHUB_PERSONAL_ACCESS_TOKEN" {
+		t.Fatalf("env keys mismatch: %+v", gh.EnvKeys)
+	}
+	if gh.Source != path {
+		t.Fatalf("source mismatch: %q", gh.Source)
+	}
+}
+
+func TestDiscoverCodex_ProjectOverridesUserConfig(t *testing.T) {
+	dir := t.TempDir()
+	userConfig := filepath.Join(dir, "user.toml")
+	projectConfig := filepath.Join(dir, "project.toml")
+	os.WriteFile(userConfig, []byte(`
+[mcp_servers.shared]
+command = "user"
+`), 0o644)
+	os.WriteFile(projectConfig, []byte(`
+[mcp_servers.shared]
+command = "project"
+`), 0o644)
+
+	servers, err := mcp.DiscoverCodex(userConfig, projectConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(servers) != 1 || servers[0].Command != "project" || servers[0].Source != projectConfig {
+		t.Fatalf("project config should win: %+v", servers)
+	}
+}
+
+func TestDiscoverCodex_MissingFileIsNotAnError(t *testing.T) {
+	servers, err := mcp.DiscoverCodex(filepath.Join(t.TempDir(), "nope.toml"))
+	if err != nil {
+		t.Fatalf("missing file should be silent: %v", err)
+	}
+	if len(servers) != 0 {
+		t.Fatalf("want empty, got %+v", servers)
+	}
+}

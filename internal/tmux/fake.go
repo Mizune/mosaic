@@ -25,6 +25,7 @@ type FakeSession struct {
 	Name       string
 	WorkingDir string
 	Command    string
+	Argv       []string
 	Env        map[string]string
 	SentKeys   []string
 }
@@ -103,6 +104,7 @@ func (f *Fake) NewSession(_ context.Context, opts NewSessionOptions) error {
 		Name:       opts.Name,
 		WorkingDir: opts.WorkingDir,
 		Command:    opts.Command,
+		Argv:       append([]string(nil), opts.Argv...),
 		Env:        envCopy,
 	}
 	return nil

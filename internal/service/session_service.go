@@ -122,6 +122,13 @@ type CreateInput struct {
 	// Direct CLI / TUI callers typically leave it empty.
 	InitialPrompt string
 
+	// ToolFlags override [SessionService.Cfg.ToolFlags] for this
+	// launch only. The TUI wizard uses this for per-session Codex
+	// mode toggles without mutating config.toml. Respawn reuses
+	// persisted attachment intent but not these one-shot overrides.
+	ToolFlags    config.ToolLaunchFlags
+	HasToolFlags bool
+
 	// CreateWorktree triggers worktree creation before tmux spawn.
 	CreateWorktree bool
 
@@ -249,7 +256,14 @@ func (s *SessionService) Create(ctx context.Context, in CreateInput) (store.Sess
 	}
 
 	launchCommand, launchArgv := s.resolveLaunchCommand(in)
+	launchArgv, launchEnv, err := s.prepareLaunch(ctx, row, launchArgv)
+	if err != nil {
+		_ = s.store.Sessions().Delete(ctx, row.ID)
+		rollbackWT()
+		return store.Session{}, fmt.Errorf("prepare launch: %w", err)
+	}
 	tmuxOpts := s.buildLaunchTmuxOpts(row, spec, launchCommand, launchArgv)
+	tmuxOpts.Env = mergeEnv(tmuxOpts.Env, launchEnv)
 
 	if err := s.tmux.NewSession(ctx, tmuxOpts); err != nil {
 		_ = s.store.Sessions().Delete(ctx, row.ID)
@@ -288,6 +302,9 @@ func (s *SessionService) resolveLaunchCommand(in CreateInput) (command string, a
 		return in.Command, splitCommandString(in.Command)
 	}
 	flags := s.flagsFor(in.Tool)
+	if in.HasToolFlags {
+		flags = mergeLaunchFlags(flags, in.ToolFlags)
+	}
 	argv = LaunchArgvForSession(in.Tool, in.WorktreePath, flags, in.ForceContinue)
 	return "", argv
 }
@@ -322,12 +339,12 @@ func (s *SessionService) buildLaunchTmuxOpts(
 	}
 
 	// Host mode: preserve the user-supplied string byte-for-byte
-	// when available, fall back to whitespace-joining the
-	// synthesised argv.
+	// when available. Synthesised launcher argv is passed as argv
+	// so generated config overrides do not need shell quoting.
 	if launchCommand != "" {
 		opts.Command = launchCommand
 	} else if len(launchArgv) > 0 {
-		opts.Command = joinArgv(launchArgv)
+		opts.Argv = launchArgv
 	}
 	return opts
 }
@@ -489,9 +506,13 @@ func (s *SessionService) doRespawn(ctx context.Context, row store.Session) error
 
 	// Respawn has no user-supplied Command string — the launcher
 	// always comes from LaunchArgvForSession, so launchCommand
-	// is empty and the helper falls through to the argv-join
-	// path for the non-docker case.
+	// is empty and the helper uses argv for the non-docker case.
+	launchArgv, launchEnv, err := s.prepareLaunch(ctx, row, launchArgv)
+	if err != nil {
+		return fmt.Errorf("respawn: prepare launch: %w", err)
+	}
 	tmuxOpts := s.buildLaunchTmuxOpts(row, spec, "", launchArgv)
+	tmuxOpts.Env = mergeEnv(tmuxOpts.Env, launchEnv)
 
 	// Container names are deterministic (`mosaic-<id>`). If the
 	// previous incarnation died without cleanup — e.g. tmux was

@@ -20,6 +20,8 @@ import (
 	"errors"
 	"os"
 	"sort"
+
+	"github.com/BurntSushi/toml"
 )
 
 // Server is a discovered MCP server. Fields mirror Claude Code's
@@ -86,6 +88,33 @@ func Discover(homeClaudeJSON, settingsJSON string) ([]Server, error) {
 	return out, nil
 }
 
+// DiscoverCodex loads and merges MCP servers from Codex config.toml
+// files. Later paths win on name conflicts, so callers can pass user
+// config first and project config second to model Codex's local
+// override behavior.
+func DiscoverCodex(configPaths ...string) ([]Server, error) {
+	all := map[string]Server{}
+	for _, path := range configPaths {
+		if path == "" {
+			continue
+		}
+		servers, err := loadCodexFromFile(path)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		for _, s := range servers {
+			all[s.Name] = s
+		}
+	}
+
+	out := make([]Server, 0, len(all))
+	for _, s := range all {
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
 // loadFromFile reads path, extracts "mcpServers", and converts each
 // entry to a [Server]. Unknown or malformed entries are skipped so a
 // single bad server never blocks discovery of the healthy ones.
@@ -136,4 +165,39 @@ func parseServer(name string, raw json.RawMessage, source string) (Server, bool)
 		Type:    cfg.Type,
 		EnvKeys: envKeys,
 	}, true
+}
+
+type codexConfig struct {
+	MCPServers map[string]codexMCPServer `toml:"mcp_servers"`
+}
+
+type codexMCPServer struct {
+	Command string            `toml:"command"`
+	Args    []string          `toml:"args"`
+	Env     map[string]string `toml:"env"`
+	Type    string            `toml:"type"`
+}
+
+func loadCodexFromFile(path string) ([]Server, error) {
+	var cfg codexConfig
+	if _, err := toml.DecodeFile(path, &cfg); err != nil {
+		return nil, err
+	}
+	out := make([]Server, 0, len(cfg.MCPServers))
+	for name, c := range cfg.MCPServers {
+		envKeys := make([]string, 0, len(c.Env))
+		for k := range c.Env {
+			envKeys = append(envKeys, k)
+		}
+		sort.Strings(envKeys)
+		out = append(out, Server{
+			Name:    name,
+			Source:  path,
+			Command: c.Command,
+			Args:    c.Args,
+			Type:    c.Type,
+			EnvKeys: envKeys,
+		})
+	}
+	return out, nil
 }
