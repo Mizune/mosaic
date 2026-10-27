@@ -31,7 +31,7 @@ func (f *fakeInlineViewer) RenderInline(_ context.Context, a store.Artifact, id,
 	if f.err != nil {
 		return viewer.KittyPlacement{}, f.err
 	}
-	return viewer.EncodeKitty(viewer.InlineImage{PNG: []byte("png-bytes"), Width: 4, Height: 2}, id, cols, rows, false)
+	return viewer.EncodeKitty(viewer.InlineImage{PNG: []byte("png-bytes"), Width: 4, Height: 2}, id, cols, rows, 0)
 }
 
 // drive runs cmd synchronously and feeds every resulting message back

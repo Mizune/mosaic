@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Backend is the surface that the session service depends on. The
@@ -43,6 +44,15 @@ type Backend interface {
 	// inter-agent note by typing it into the receiving agent's
 	// prompt.
 	SendKeys(ctx context.Context, target, keys string, enterAfter bool) error
+
+	// SetGlobalEnv sets (or, with an empty value, unsets) a variable in
+	// the server's global environment, which every pane and popup
+	// created afterwards inherits.
+	SetGlobalEnv(ctx context.Context, name, value string) error
+
+	// DisplayMessage shows text in the status line of the clients
+	// attached to target for delay. A missing target is not an error.
+	DisplayMessage(ctx context.Context, target, text string, delay time.Duration) error
 }
 
 // NewSessionOptions configures [Backend.NewSession].

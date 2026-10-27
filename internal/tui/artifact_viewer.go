@@ -48,7 +48,7 @@ func (a *viewerAdapter) RenderInline(ctx context.Context, row store.Artifact, id
 	if err != nil {
 		return viewer.KittyPlacement{}, err
 	}
-	return viewer.EncodeKitty(img, id, cols, rows, a.inline.InTmux)
+	return viewer.EncodeKitty(img, id, cols, rows, a.inline.TmuxDepth)
 }
 
 func (a *viewerAdapter) Open(ctx context.Context, row store.Artifact) error {

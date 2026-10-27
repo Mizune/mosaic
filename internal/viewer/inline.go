@@ -2,6 +2,7 @@ package viewer
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -20,6 +21,12 @@ const (
 type InlineSupport struct {
 	Supported bool
 	InTmux    bool
+	// TmuxDepth is how many tmux servers sit between the process and
+	// the terminal: 0 outside tmux, 1 inside one, 2 when the TUI itself
+	// runs under the user's tmux and the process is in mosaic's own
+	// server (a popup or split inside an attached session). Each layer
+	// needs its own passthrough wrapper.
+	TmuxDepth int
 	Reason    string
 }
 
@@ -29,11 +36,23 @@ type InlineSupport struct {
 type Environment struct {
 	Getenv     func(string) string
 	TmuxOption func(ctx context.Context, name string) (string, error)
+	// TmuxOptionAt reads a global option from the server at socket
+	// (the outer tmux named by MOSAIC_OUTER_TMUX).
+	TmuxOptionAt func(ctx context.Context, socket, name string) (string, error)
 }
 
 // DefaultEnvironment probes the real process.
 func DefaultEnvironment() Environment {
-	return Environment{Getenv: os.Getenv, TmuxOption: tmuxGlobalOption}
+	return Environment{Getenv: os.Getenv, TmuxOption: tmuxGlobalOption, TmuxOptionAt: tmuxGlobalOptionAt}
+}
+
+// tmuxGlobalOptionAt reads a global option from the server behind socket.
+func tmuxGlobalOptionAt(ctx context.Context, socket, name string) (string, error) {
+	out, err := exec.CommandContext(ctx, "tmux", "-S", socket, "show-options", "-gv", name).Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // tmuxGlobalOption reads a global option from the tmux server named by
@@ -59,6 +78,9 @@ func DetectInline(ctx context.Context, mode string, env Environment) InlineSuppo
 	if env.TmuxOption == nil {
 		env.TmuxOption = tmuxGlobalOption
 	}
+	if env.TmuxOptionAt == nil {
+		env.TmuxOptionAt = tmuxGlobalOptionAt
+	}
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case InlineOff:
 		return InlineSupport{Reason: `inline preview is off ([viewer] inline = "off"); Enter opens the artifact in a browser`}
@@ -73,12 +95,32 @@ func DetectInline(ctx context.Context, mode string, env Environment) InlineSuppo
 		return s
 	}
 	s.InTmux = true
+	s.TmuxDepth = 1
 	v, err := env.TmuxOption(ctx, "allow-passthrough")
-	if err != nil || (v != "on" && v != "all") {
+	if err != nil || !passthroughEnabled(v) {
 		s.Supported = false
 		s.Reason = "inside tmux: run `tmux set -g allow-passthrough on` to enable inline preview"
+		return s
+	}
+	// MOSAIC_OUTER_TMUX is set on mosaic's server by the TUI at attach
+	// time when the TUI itself runs inside tmux. A popup or split in
+	// the attached session then has two servers to cross.
+	outer := strings.TrimSpace(env.Getenv("MOSAIC_OUTER_TMUX"))
+	if outer == "" {
+		return s
+	}
+	s.TmuxDepth = 2
+	socket, _, _ := strings.Cut(outer, ",")
+	v, err = env.TmuxOptionAt(ctx, socket, "allow-passthrough")
+	if err != nil || !passthroughEnabled(v) {
+		s.Supported = false
+		s.Reason = fmt.Sprintf("the outer tmux (%s) needs `tmux set -g allow-passthrough on` to enable inline preview", socket)
 	}
 	return s
+}
+
+func passthroughEnabled(v string) bool {
+	return v == "on" || v == "all"
 }
 
 // kittyTerminal reports whether the environment points at a terminal

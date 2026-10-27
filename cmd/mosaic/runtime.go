@@ -123,7 +123,9 @@ func openRuntime(ctx context.Context, opts runtimeOptions) (*runtime, error) {
 	// new bindings without a kill-server. Both steps are best
 	// effort: worst case the user has to use the tmux prefix to
 	// detach.
-	if err := tmux.EnsureConfigFile(paths.TmuxConfigFile); err == nil {
+	if err := tmux.EnsureConfigFile(paths.TmuxConfigFile, tmux.ConfigOptions{
+		ArtifactViewer: res.Config.Viewer.TmuxViewer,
+	}); err == nil {
 		tmuxBackend.ConfigFile = paths.TmuxConfigFile
 		_ = tmuxBackend.SourceConfig(ctx)
 	}

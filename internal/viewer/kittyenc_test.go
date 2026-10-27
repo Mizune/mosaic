@@ -11,7 +11,7 @@ import (
 
 func TestEncodeKitty_SingleChunk(t *testing.T) {
 	img := InlineImage{PNG: []byte("tiny-png-bytes"), Width: 4, Height: 2}
-	p, err := EncodeKitty(img, 7, 10, 5, false)
+	p, err := EncodeKitty(img, 7, 10, 5, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestEncodeKitty_SingleChunk(t *testing.T) {
 
 func TestEncodeKitty_ChunksAndTmuxWrapping(t *testing.T) {
 	img := InlineImage{PNG: make([]byte, 9000), Width: 1, Height: 1}
-	p, err := EncodeKitty(img, 255, 3, 2, true)
+	p, err := EncodeKitty(img, 255, 3, 2, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,16 +101,16 @@ func TestEncodeKitty_ChunksAndTmuxWrapping(t *testing.T) {
 
 func TestEncodeKitty_Validation(t *testing.T) {
 	img := InlineImage{PNG: []byte("x")}
-	if _, err := EncodeKitty(img, 0, 1, 1, false); err == nil {
+	if _, err := EncodeKitty(img, 0, 1, 1, 0); err == nil {
 		t.Fatal("id 0 must be rejected")
 	}
-	if _, err := EncodeKitty(img, 256, 1, 1, false); err == nil {
+	if _, err := EncodeKitty(img, 256, 1, 1, 0); err == nil {
 		t.Fatal("id 256 must be rejected")
 	}
-	if _, err := EncodeKitty(InlineImage{}, 1, 1, 1, false); err == nil {
+	if _, err := EncodeKitty(InlineImage{}, 1, 1, 1, 0); err == nil {
 		t.Fatal("empty image must be rejected")
 	}
-	p, err := EncodeKitty(img, 1, 0, 1000, false)
+	p, err := EncodeKitty(img, 1, 0, 1000, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,5 +122,40 @@ func TestEncodeKitty_Validation(t *testing.T) {
 func TestNextKittyID(t *testing.T) {
 	if NextKittyID(0) != 1 || NextKittyID(1) != 2 || NextKittyID(254) != 255 || NextKittyID(255) != 1 || NextKittyID(-5) != 1 {
 		t.Fatal("ids must cycle through 1..255")
+	}
+}
+
+// unwrapTmux strips one passthrough layer: DCS tmux; ... ST with ESC
+// un-doubled, exactly what one tmux server does before forwarding.
+func unwrapTmux(t *testing.T, s string) string {
+	t.Helper()
+	if !strings.HasPrefix(s, "\x1bPtmux;") || !strings.HasSuffix(s, "\x1b\\") {
+		t.Fatalf("not a passthrough: %q", s[:min(len(s), 12)])
+	}
+	inner := strings.TrimSuffix(strings.TrimPrefix(s, "\x1bPtmux;"), "\x1b\\")
+	return strings.ReplaceAll(inner, "\x1b\x1b", "\x1b")
+}
+
+func TestEncodeKitty_NestedTmuxWrapping(t *testing.T) {
+	img := InlineImage{PNG: []byte("png"), Width: 1, Height: 1}
+	p, err := EncodeKitty(img, 3, 2, 2, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Two servers: the first strip must yield a still-wrapped sequence,
+	// the second the raw APC.
+	once := unwrapTmux(t, p.Transmit)
+	raw := unwrapTmux(t, once)
+	if !strings.HasPrefix(raw, "\x1b_Ga=T,U=1,q=2,f=100,i=3,c=2,r=2,m=0;") || !strings.HasSuffix(raw, "\x1b\\") {
+		t.Fatalf("after two unwraps expected the raw sequence, got %q", raw)
+	}
+	del := unwrapTmux(t, unwrapTmux(t, p.Delete))
+	if del != "\x1b_Ga=d,d=I,i=3,q=2\x1b\\" {
+		t.Fatalf("delete = %q", del)
+	}
+	// Depth 0 leaves the sequence untouched.
+	p0, _ := EncodeKitty(img, 3, 2, 2, 0)
+	if !strings.HasPrefix(p0.Transmit, "\x1b_G") {
+		t.Fatal("depth 0 must not wrap")
 	}
 }

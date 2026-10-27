@@ -443,6 +443,16 @@ type ViewerSection struct {
 	// Mermaid, HTML, SVG and URL artifacts for the inline preview.
 	// Empty means auto-detect.
 	ChromePath string `toml:"chrome_path"`
+
+	// TmuxViewer selects how prefix+O opens the artifact viewer inside
+	// an attached session: "popup" (tmux display-popup, default) or
+	// "split" (a right-hand split pane).
+	TmuxViewer string `toml:"tmux_viewer"`
+
+	// NotifyTmux shows a short tmux status-line message in the session
+	// when a new artifact is detected while you are attached. Nullable
+	// like Enabled; defaults to true.
+	NotifyTmux *bool `toml:"notify_tmux"`
 }
 
 // Default returns the built-in defaults applied before any user config
@@ -511,6 +521,8 @@ func Default() Config {
 			MermaidJSURL: DefaultMermaidJSURL,
 			Placement:    "dock",
 			Inline:       "auto",
+			TmuxViewer:   "popup",
+			NotifyTmux:   BoolPtr(true),
 		},
 	}
 }

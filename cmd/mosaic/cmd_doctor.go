@@ -136,7 +136,7 @@ func runDoctor(out io.Writer, opts doctorOptions) error {
 	// every session mosaic spawns. Any failure here is reported but
 	// does not fail doctor — the user can still use tmux's default
 	// prefix to detach.
-	if err := tmux.EnsureConfigFile(paths.TmuxConfigFile); err != nil {
+	if err := tmux.EnsureConfigFile(paths.TmuxConfigFile, tmux.ConfigOptions{ArtifactViewer: cfg.Viewer.TmuxViewer}); err != nil {
 		fmt.Fprintln(out, statusFail("tmux conf", err.Error()))
 	} else {
 		fmt.Fprintln(out, statusOK("tmux conf", paths.TmuxConfigFile))

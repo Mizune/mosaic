@@ -5,7 +5,20 @@ import (
 	"path/filepath"
 )
 
-// DefaultConfigBody is the tmux configuration mosaic installs so
+// Artifact viewer modes for the prefix+O binding; see [ConfigOptions].
+const (
+	ArtifactViewerPopup = "popup"
+	ArtifactViewerSplit = "split"
+)
+
+// ConfigOptions parameterises the generated tmux config.
+type ConfigOptions struct {
+	// ArtifactViewer is how prefix+O opens `mosaic artifacts`: a tmux
+	// popup (default) or a right-hand split.
+	ArtifactViewer string
+}
+
+// DefaultConfigBody renders the tmux configuration mosaic installs so
 // every session it spawns has a consistent detach binding and a few
 // quality-of-life tweaks.
 //
@@ -14,7 +27,22 @@ import (
 // Claude session. Without it, `q`/`Esc` just type characters into
 // whatever the agent is running, and the user has no escape hatch
 // short of killing the pane.
-const DefaultConfigBody = `# mosaic-managed tmux config — regenerated on every startup.
+func DefaultConfigBody(opts ConfigOptions) string {
+	return configBodyHead + artifactViewerBlock(opts) + configBodyTail
+}
+
+// artifactViewerBlock is the prefix+O binding. The popup variant tags
+// the environment so the viewer can tell it runs inside a popup.
+func artifactViewerBlock(opts ConfigOptions) string {
+	const comment = "\n# Open the artifact viewer for the current session (prefix+O).\n" +
+		"# 'mosaic artifacts' resolves the session the same way 'mosaic diff' does.\n"
+	if opts.ArtifactViewer == ArtifactViewerSplit {
+		return comment + `bind-key O split-window -h "mosaic artifacts"` + "\n"
+	}
+	return comment + `bind-key O display-popup -E -w 90% -h 90% -T " artifacts " -e MOSAIC_TMUX_POPUP=1 "mosaic artifacts"` + "\n"
+}
+
+const configBodyHead = `# mosaic-managed tmux config — regenerated on every startup.
 # To override, edit ~/.mosaic/tmux-overlay.conf (sourced at the end).
 
 # Detach from a mosaic session and return to the TUI.
@@ -33,14 +61,18 @@ bind-key d detach-client
 # would force --color=auto into "no color" because stdout becomes
 # a pipe.
 bind-key D split-window -h "mosaic diff"
+`
 
+const configBodyTail = `
 # Keep ESC snappy in editors running inside a session.
 set -sg escape-time 10
 
-# Allow OSC escape sequences (status line, notifications, etc.)
-# to pass through tmux to the outer terminal. Without this,
-# Claude Code's status line and similar features are invisible.
-set -g allow-passthrough on
+# Allow OSC / Kitty graphics escape sequences to pass through tmux
+# to the outer terminal. Without this, Claude Code's status line and
+# similar features are invisible. 'all' (not just 'on') keeps the
+# artifact viewer's inline images working from a popup, whose pane
+# is hidden underneath it.
+set -g allow-passthrough all
 
 # Larger scrollback so capture-pane can pick up long tool outputs.
 set -g history-limit 50000
@@ -66,9 +98,9 @@ source-file -q ~/.mosaic/tmux-overlay.conf
 // creating the parent directory if needed. It is idempotent and
 // overwrites the file on every call so the authoritative version is
 // whatever the currently running mosaic binary thinks it should be.
-func EnsureConfigFile(path string) error {
+func EnsureConfigFile(path string, opts ConfigOptions) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(DefaultConfigBody), 0o644)
+	return os.WriteFile(path, []byte(DefaultConfigBody(opts)), 0o644)
 }

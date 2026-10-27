@@ -49,9 +49,11 @@ func NextKittyID(prev int) int {
 }
 
 // EncodeKitty builds the placement for img under image id (1..255)
-// in a box of cols x rows cells. With tmux set, every escape sequence
-// is wrapped in a tmux passthrough so it reaches the outer terminal.
-func EncodeKitty(img InlineImage, id, cols, rows int, tmux bool) (KittyPlacement, error) {
+// in a box of cols x rows cells. tmuxDepth is the number of tmux
+// servers between the process and the terminal; every escape sequence
+// is wrapped in that many passthrough layers so each server forwards
+// it instead of swallowing it.
+func EncodeKitty(img InlineImage, id, cols, rows, tmuxDepth int) (KittyPlacement, error) {
 	if id < 1 || id > 255 {
 		return KittyPlacement{}, fmt.Errorf("viewer: kitty image id %d out of range 1..255", id)
 	}
@@ -80,7 +82,7 @@ func EncodeKitty(img InlineImage, id, cols, rows int, tmux bool) (KittyPlacement
 			more = "m=0"
 		}
 		opts = append(opts, more)
-		transmit.WriteString(wrapTmux(ansi.KittyGraphics([]byte(payload[start:end]), opts...), tmux))
+		transmit.WriteString(wrapTmux(ansi.KittyGraphics([]byte(payload[start:end]), opts...), tmuxDepth))
 	}
 
 	del := ansi.KittyGraphics(nil, "a=d", "d=I", fmt.Sprintf("i=%d", id), "q=2")
@@ -90,7 +92,7 @@ func EncodeKitty(img InlineImage, id, cols, rows int, tmux bool) (KittyPlacement
 		Rows:     rows,
 		Transmit: transmit.String(),
 		Lines:    placeholderLines(id, cols, rows),
-		Delete:   wrapTmux(del, tmux),
+		Delete:   wrapTmux(del, tmuxDepth),
 	}, nil
 }
 
@@ -113,14 +115,15 @@ func placeholderLines(id, cols, rows int) []string {
 	return lines
 }
 
-// wrapTmux wraps seq in a tmux passthrough (DCS tmux; ... ST) with every
-// ESC doubled, as tmux requires, so the multiplexer forwards it to the
-// terminal instead of swallowing it.
-func wrapTmux(seq string, on bool) string {
-	if !on {
-		return seq
+// wrapTmux wraps seq in depth layers of tmux passthrough (DCS tmux; ...
+// ST with every ESC doubled). The innermost layer is for the outermost
+// server: each server strips one layer and forwards the remainder, so
+// the terminal finally receives the raw sequence.
+func wrapTmux(seq string, depth int) string {
+	for i := 0; i < depth; i++ {
+		seq = "\x1bPtmux;" + strings.ReplaceAll(seq, "\x1b", "\x1b\x1b") + "\x1b\\"
 	}
-	return "\x1bPtmux;" + strings.ReplaceAll(seq, "\x1b", "\x1b\x1b") + "\x1b\\"
+	return seq
 }
 
 func clamp(v, lo, hi int) int {

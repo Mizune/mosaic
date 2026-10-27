@@ -105,6 +105,12 @@ func mergeViewer(base, ov ViewerSection) ViewerSection {
 	if ov.ChromePath != "" {
 		out.ChromePath = ov.ChromePath
 	}
+	if ov.TmuxViewer != "" {
+		out.TmuxViewer = ov.TmuxViewer
+	}
+	if ov.NotifyTmux != nil {
+		out.NotifyTmux = ov.NotifyTmux
+	}
 	return out
 }
 
