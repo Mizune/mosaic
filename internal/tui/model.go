@@ -77,6 +77,11 @@ const (
 	// project's .mosaic/config.toml. Payload lives in
 	// Model.recipeWizard.
 	ScreenRecipeWizard
+	// ScreenArtifacts is the artifact picker (`o`): the rich content
+	// (Mermaid diagrams, images, HTML, URLs) detected for the
+	// focused session, opened in a browser pane via the viewer.
+	// Payload lives in Model.artifactPanel.
+	ScreenArtifacts
 )
 
 // Model is the Bubble Tea state for the mosaic TUI.
@@ -115,7 +120,22 @@ type Model struct {
 	// startup.
 	firstRefreshDone bool
 
-	subagents     map[string][]store.Subagent // sessionID → sub-agents
+	subagents map[string][]store.Subagent // sessionID → sub-agents
+
+	// artifacts maps sessionID → rich-content rows (mermaid / image /
+	// html / url), newest first. Refreshed alongside subagents.
+	artifacts map[string][]store.Artifact
+	// artifactPanel is the payload of ScreenArtifacts.
+	artifactPanel artifactPanelState
+	// artifactViewer opens artifacts outside the TUI (cmux browser
+	// pane or the OS browser). nil means opening is disabled.
+	artifactViewer artifactViewer
+	// termSeq holds raw terminal sequences (Kitty graphics transmit /
+	// delete) emitted at the start of the next frames; termSeqGen
+	// lets a late flush message skip sequences queued after it.
+	termSeq    string
+	termSeqGen int
+
 	cursor        int
 	groupExpanded map[string]bool
 	error         string
@@ -338,10 +358,10 @@ func (f statusFilterMode) label() string {
 
 // logEntry is one row of the error log ring buffer.
 type logEntry struct {
-	Level   string // "info" | "warn" | "error"
-	Title   string
-	Body    string
-	When    time.Time
+	Level string // "info" | "warn" | "error"
+	Title string
+	Body  string
+	When  time.Time
 }
 
 // configPathsView is the subset of mosaic paths the Settings
@@ -416,10 +436,16 @@ func NewModel(svc *service.SessionService, st *store.Store, b *bus.Bus, t *theme
 		config:        cfg,
 		groupExpanded: map[string]bool{},
 		subagents:     map[string][]store.Subagent{},
+		artifacts:     map[string][]store.Artifact{},
 		keys:          keys,
 		busEvents:     make(chan struct{}, 16),
 		selected:      map[string]bool{},
 		visualAnchor:  -1,
+	}
+	// The artifact viewer is optional: [viewer] enabled = false leaves
+	// the picker read-only (Enter shows a "viewer disabled" toast).
+	if config.BoolOr(cfg.Viewer.Enabled, true) {
+		m.artifactViewer = newViewerAdapter(cfg.Viewer)
 	}
 	// Subscribe to the in-process bus so backend state changes
 	// (hook busy events, transcript entries, session lifecycle,
@@ -509,9 +535,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(v)
 
 	case refreshedMsg:
+		firstRefresh := !m.firstRefreshDone
 		m.firstRefreshDone = true
 		if v.subagents != nil {
 			m.subagents = v.subagents
+		}
+		var autoOpen tea.Cmd
+		if v.artifacts != nil {
+			autoOpen = m.autoOpenNewArtifacts(m.artifacts, v.artifacts, firstRefresh)
+			m.artifacts = v.artifacts
 		}
 		// Compare the pre/post attention state of every session
 		// so hook-sourced attention flips (which happen in the
@@ -533,6 +565,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.error = ""
 		}
+		return m, autoOpen
 
 	case updateAvailableMsg:
 		if v.latest != "" {
@@ -667,12 +700,36 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case recipeSaveResultMsg:
 		return m.applyRecipeSaveResultMsg(v)
+
+	case artifactOpenedMsg:
+		m.applyArtifactOpened(v)
+		return m, nil
+
+	case artifactInlineDebounceMsg:
+		return m, m.applyInlineDebounce(v)
+
+	case artifactInlineMsg:
+		return m, m.applyInlineResult(v)
+
+	case termSeqFlushedMsg:
+		m.applyTermSeqFlushed(v)
+		return m, nil
 	}
 	return m, nil
 }
 
-// View dispatches to the screen-specific render function.
+// View renders the current screen, prefixed by any queued raw
+// terminal sequence (zero-width, so the layout is unaffected).
 func (m *Model) View() string {
+	out := m.renderScreen()
+	if m.termSeq != "" {
+		return m.termSeq + out
+	}
+	return out
+}
+
+// renderScreen dispatches to the screen-specific render function.
+func (m *Model) renderScreen() string {
 	if m.width == 0 {
 		return "loading..."
 	}
@@ -708,6 +765,8 @@ func (m *Model) View() string {
 		return m.renderProfilePanel()
 	case ScreenRecipeWizard:
 		return renderRecipeWizard(&m.recipeWizard, m.theme, m.width, m.height)
+	case ScreenArtifacts:
+		return m.renderArtifactPanel()
 	default:
 		return m.renderTop()
 	}
@@ -719,6 +778,7 @@ func (m *Model) View() string {
 type refreshedMsg struct {
 	list      service.ListResult
 	subagents map[string][]store.Subagent
+	artifacts map[string][]store.Artifact
 	// capture carries the tmux capture-pane output of the
 	// currently-focused session, plus the name it belongs to so
 	// the Model can ignore stale captures that land after the
@@ -775,6 +835,14 @@ func (m *Model) fetchRefreshed(ctx context.Context) refreshedMsg {
 			}
 		}
 	}
+	// One query for every session's artifacts; nil (not empty) when
+	// the read fails so Update keeps the previous snapshot.
+	var arts map[string][]store.Artifact
+	if m.store != nil && err == nil {
+		if all, aerr := m.store.Artifacts().ListAll(ctx); aerr == nil {
+			arts = all
+		}
+	}
 
 	// Scan every running session's pane for interactive prompts.
 	// Capturing idle / stopped sessions is wasted work, so we
@@ -814,6 +882,7 @@ func (m *Model) fetchRefreshed(ctx context.Context) refreshedMsg {
 	return refreshedMsg{
 		list:               refreshed,
 		subagents:          subs,
+		artifacts:          arts,
 		capture:            capture,
 		captureSessionName: captureName,
 		err:                err,

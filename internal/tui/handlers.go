@@ -46,6 +46,13 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.updateSkillPanel(msg)
 	}
+	// Artifact picker: modal like MCP/Skill.
+	if m.screen == ScreenArtifacts {
+		if msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+		return m.updateArtifactPanel(msg)
+	}
 	// Settings screen: interactive field editor. Ctrl+C quits
 	// mosaic; everything else is routed through updateSettings.
 	if m.screen == ScreenSettings {
@@ -215,6 +222,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case matches(msg, m.keys.Diff):
 		m.openDiffPanel()
 		return m, nil
+	case matches(msg, m.keys.Artifacts):
+		return m, m.openArtifactPanel()
 	}
 	return m, nil
 }

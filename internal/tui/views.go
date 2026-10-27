@@ -714,6 +714,11 @@ func (m *Model) renderPreviewTabs(innerWidth int) string {
 		mkTab("sub-agents", previewSubAgentsOnly) + sep +
 		mkTab("diff", previewDiffSummary)
 	hint := m.theme.MutedText.Render("Tab ↹")
+	if sess, ok := m.selectedSession(); ok {
+		if badge := m.renderArtifactBadge(len(m.artifacts[sess.ID])); badge != "" {
+			hint = badge + m.theme.MutedText.Render(" · o   Tab ↹")
+		}
+	}
 	gap := innerWidth - lipgloss.Width(tabs) - lipgloss.Width(hint)
 	if gap < 1 {
 		gap = 1
@@ -756,6 +761,12 @@ func (m *Model) renderPreviewStructured(row store.Session, innerHeight, innerWid
 		top = append(top, m.renderSection(
 			fmt.Sprintf("Sub-agents (%d)", len(subs)),
 			m.formatSubAgentLines(subs)))
+	}
+
+	if arts := m.artifacts[row.ID]; len(arts) > 0 {
+		top = append(top, m.renderSection(
+			fmt.Sprintf("Artifacts (%d)", len(arts)),
+			m.formatArtifactLines(arts, 3)))
 	}
 
 	topBody := strings.Join(top, "\n\n")
@@ -990,6 +1001,7 @@ func (m *Model) renderStatusBar() string {
 		keyHint("E", "log"),
 		keyHint("m", "mcp"),
 		keyHint("s", "skill"),
+		keyHint("o", "artifacts"),
 		keyHint(",", "settings"),
 		keyHint("q", "quit"),
 	}, "  ")
@@ -1118,6 +1130,7 @@ func (m *Model) renderHelp() string {
 		"  s       Skill manager (attach / detach skills)",
 		"  c       Conductor panel (DAG runs + tasks)",
 		"  d       Diff view (l:full · s:stage · c:commit · y/Y:yank · /:search)",
+		"  o       Artifact picker (mermaid / images / html → browser pane)",
 		"  ,       Settings (read-only)",
 		"  ?       toggle help",
 		"  q/Ctrl+C quit",
