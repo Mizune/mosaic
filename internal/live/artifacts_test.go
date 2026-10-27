@@ -120,7 +120,7 @@ func TestReconciler_PublishesArtifactDetectedOnlyForNewRows(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("expected exactly one ArtifactDetected, got %d", len(events))
 	}
-	if events[0].SessionID != env.Parent.ID || events[0].ArtifactID != rows[0].ID || events[0].Kind != "mermaid" {
+	if events[0].SessionID != env.Parent.ID || events[0].ArtifactID != rows[0].ID || events[0].Kind != "mermaid" || events[0].Title != "graph TD" {
 		t.Fatalf("unexpected event: %+v", events[0])
 	}
 }

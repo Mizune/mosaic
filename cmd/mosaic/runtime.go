@@ -58,6 +58,7 @@ type runtime struct {
 	watcher    *claudeio.Watcher
 	hookServer *hook.Server
 	reconciler *live.Reconciler
+	notifier   *live.ArtifactNotifier
 	binder     *live.Binder
 	messaging  *service.MessagingService
 	discord    *discord.Bridge
@@ -207,6 +208,14 @@ func (r *runtime) startLive(ctx context.Context, home string) error {
 	r.reconciler = live.NewReconciler(r.store, r.bus, recOpts...)
 	r.reconciler.Start()
 
+	// Status-line notification inside an attached session when a
+	// new artifact is detected; the attached user cannot see the
+	// TUI's badge.
+	if config.BoolOr(r.config.Viewer.NotifyTmux, true) {
+		r.notifier = live.NewArtifactNotifier(r.store, r.bus, r.tmux)
+		r.notifier.Start()
+	}
+
 	r.binder = live.NewBinder(r.store, r.watcher, home)
 	r.binder.Start(cctx)
 
@@ -276,6 +285,9 @@ func (r *runtime) Close() error {
 		r.binder = nil
 	}
 	if r.reconciler != nil {
+		if r.notifier != nil {
+			r.notifier.Stop()
+		}
 		r.reconciler.Stop()
 		r.reconciler = nil
 	}

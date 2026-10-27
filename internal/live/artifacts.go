@@ -15,6 +15,7 @@ type ArtifactDetected struct {
 	SessionID  string // mosaic session id (store.Session.ID)
 	ArtifactID string
 	Kind       string
+	Title      string
 }
 
 // recordArtifacts detects rich content (Mermaid blocks, image and HTML
@@ -40,7 +41,7 @@ func (r *Reconciler) recordArtifacts(ctx context.Context, parent store.Session, 
 			continue
 		}
 		if created && r.bus != nil {
-			r.bus.Publish(ArtifactDetected{SessionID: parent.ID, ArtifactID: row.ID, Kind: row.Kind})
+			r.bus.Publish(ArtifactDetected{SessionID: parent.ID, ArtifactID: row.ID, Kind: row.Kind, Title: row.Title})
 		}
 	}
 }
