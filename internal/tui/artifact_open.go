@@ -41,15 +41,10 @@ type artifactOpenedMsg struct {
 // milliseconds; a hung CLI must not wedge the command goroutine.
 const openArtifactTimeout = 5 * time.Second
 
-// openArtifactCmd returns a tea.Cmd that opens a in the configured
-// viewer. The exec happens inside the command goroutine, never in
-// Update, so the TUI stays responsive (same shape as forkSelected).
-func (m *Model) openArtifactCmd(a store.Artifact) tea.Cmd {
-	v := m.artifactViewer
-	if v == nil {
-		m.setTopToast("viewer disabled ([viewer] enabled = false)")
-		return nil
-	}
+// openArtifactCmd returns a tea.Cmd that opens a in v. The exec happens
+// inside the command goroutine, never in Update, so the host stays
+// responsive (same shape as forkSelected).
+func openArtifactCmd(v artifactViewer, a store.Artifact) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), openArtifactTimeout)
 		defer cancel()
@@ -58,48 +53,6 @@ func (m *Model) openArtifactCmd(a store.Artifact) tea.Cmd {
 		}
 		return artifactOpenedMsg{title: a.Title, backend: v.Name()}
 	}
-}
-
-// applyArtifactOpened surfaces an open result as a toast, or as an
-// error-log entry when the backend failed.
-func (m *Model) applyArtifactOpened(v artifactOpenedMsg) {
-	if v.err != "" {
-		m.flagError("open artifact failed", v.err)
-		return
-	}
-	m.setTopToast("opened " + v.title + " (" + v.backend + ")")
-}
-
-// submitManualArtifact validates the picker's text input, persists it
-// as a manual artifact so it reappears in the list, and opens it.
-// Validation errors stay inside the input box; the picker remains open.
-func (m *Model) submitManualArtifact() tea.Cmd {
-	p := &m.artifactPanel
-	raw := strings.TrimSpace(p.input.value)
-	if raw == "" {
-		p.input.err = "path or URL is required"
-		return nil
-	}
-	in, err := manualArtifactInput(raw, p.sessionID)
-	if err != nil {
-		p.input.err = err.Error()
-		return nil
-	}
-	if m.store == nil {
-		p.input.err = "store unavailable"
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	row, _, err := m.store.Artifacts().Upsert(ctx, in)
-	if err != nil {
-		p.input.err = err.Error()
-		return nil
-	}
-	p.input = artifactInput{}
-	m.reloadArtifactPanel()
-	p.cursor = 0
-	return tea.Batch(m.openArtifactCmd(row), m.scheduleInlinePreview())
 }
 
 // maxManualMermaidBytes caps a .mmd file read from the picker.
@@ -189,5 +142,5 @@ func (m *Model) autoOpenNewArtifacts(prev, next map[string][]store.Artifact, fir
 	if newest == nil {
 		return nil
 	}
-	return m.openArtifactCmd(*newest)
+	return openArtifactCmd(m.artifactViewer, *newest)
 }

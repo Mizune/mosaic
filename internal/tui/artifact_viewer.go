@@ -22,6 +22,13 @@ type viewerAdapter struct {
 }
 
 func newViewerAdapter(cfg config.ViewerSection) *viewerAdapter {
+	return newViewerAdapterEnv(cfg, viewer.DefaultEnvironment())
+}
+
+// newViewerAdapterEnv is newViewerAdapter with an explicit probe
+// environment, so the popup program can describe the tmux it runs
+// under and tests can script the detection.
+func newViewerAdapterEnv(cfg config.ViewerSection, env viewer.Environment) *viewerAdapter {
 	opts := viewer.OptionsFrom(cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -30,7 +37,7 @@ func newViewerAdapter(cfg config.ViewerSection) *viewerAdapter {
 		pages:    &viewer.PageWriter{Root: opts.CacheRoot},
 		opts:     opts,
 		raster:   viewer.NewRasterizer(opts.ChromePath, opts.CacheRoot),
-		inline:   viewer.DetectInline(ctx, opts.Inline, viewer.DefaultEnvironment()),
+		inline:   viewer.DetectInline(ctx, opts.Inline, env),
 	}
 }
 

@@ -21,7 +21,7 @@ type inlinePreviewer interface {
 
 // artifactInlineState tracks the preview drawn in the picker's right
 // column. Only one image is alive at a time; switching artifacts frees
-// the previous one through the terminal-sequence queue.
+// the previous one through the host's terminal-sequence queue.
 type artifactInlineState struct {
 	supported  bool
 	reason     string
@@ -40,11 +40,6 @@ const inlineDebounce = 150 * time.Millisecond
 // inlineRenderTimeout bounds one preview (page write + rasterize).
 const inlineRenderTimeout = 40 * time.Second
 
-// termSeqFlushDelay is how long a queued terminal sequence stays in the
-// frame. Bubble Tea flushes at 60 fps, so one frame is enough; a few
-// extra frames cost nothing because unchanged lines are not re-sent.
-const termSeqFlushDelay = 250 * time.Millisecond
-
 type (
 	// artifactInlineDebounceMsg fires after the cursor has rested.
 	artifactInlineDebounceMsg struct{ artifactID string }
@@ -54,50 +49,27 @@ type (
 		placement  viewer.KittyPlacement
 		err        string
 	}
-	// termSeqFlushedMsg clears a queued terminal sequence.
-	termSeqFlushedMsg struct{ gen int }
 )
 
-// queueTermSeq schedules raw escape sequences (Kitty transmit / delete)
-// to be emitted at the start of the next frames, then dropped. Going
-// through View keeps the write inside the renderer instead of racing it
-// from another goroutine.
-func (m *Model) queueTermSeq(seq string) tea.Cmd {
-	if seq == "" {
-		return nil
-	}
-	m.termSeq += seq
-	m.termSeqGen++
-	gen := m.termSeqGen
-	return tea.Tick(termSeqFlushDelay, func(time.Time) tea.Msg { return termSeqFlushedMsg{gen: gen} })
-}
-
-func (m *Model) applyTermSeqFlushed(v termSeqFlushedMsg) {
-	if v.gen == m.termSeqGen {
-		m.termSeq = ""
-	}
-}
-
-// initInlineState reads the viewer's capability once per picker open.
-func (m *Model) initInlineState() {
-	st := &m.artifactPanel.inline
+// initInline reads the viewer's capability once per picker open.
+func (p *artifactPicker) initInline() {
+	st := &p.inline
 	*st = artifactInlineState{}
-	if m.artifactViewer == nil {
+	if p.deps.viewer == nil {
 		st.reason = "viewer disabled ([viewer] enabled = false)"
 		return
 	}
-	p, ok := m.artifactViewer.(inlinePreviewer)
+	previewer, ok := p.deps.viewer.(inlinePreviewer)
 	if !ok {
 		st.reason = "this viewer cannot draw inline; Enter opens the artifact in a browser"
 		return
 	}
-	st.supported, st.reason = p.InlineSupport()
+	st.supported, st.reason = previewer.InlineSupport()
 }
 
-// scheduleInlinePreview is called whenever the selection may have
-// changed. It records the wanted artifact and arms the debounce.
-func (m *Model) scheduleInlinePreview() tea.Cmd {
-	p := &m.artifactPanel
+// scheduleInline is called whenever the selection may have changed. It
+// records the wanted artifact and arms the debounce.
+func (p *artifactPicker) scheduleInline() tea.Cmd {
 	if !p.inline.supported || p.cursor < 0 || p.cursor >= len(p.items) {
 		return nil
 	}
@@ -106,29 +78,39 @@ func (m *Model) scheduleInlinePreview() tea.Cmd {
 		return nil
 	}
 	p.inline.want = id
+	return debounceInline(id)
+}
+
+func debounceInline(id string) tea.Cmd {
 	return tea.Tick(inlineDebounce, func(time.Time) tea.Msg { return artifactInlineDebounceMsg{artifactID: id} })
 }
 
 // applyInlineDebounce starts the render if the cursor still rests on
-// the artifact the debounce was armed for.
-func (m *Model) applyInlineDebounce(v artifactInlineDebounceMsg) tea.Cmd {
-	p := &m.artifactPanel
-	if m.screen != ScreenArtifacts || v.artifactID != p.inline.want || p.cursor >= len(p.items) {
+// the artifact the debounce was armed for. A closed (zeroed) picker
+// has no wanted artifact, so late messages fall through harmlessly.
+func (p *artifactPicker) applyInlineDebounce(v artifactInlineDebounceMsg) tea.Cmd {
+	if v.artifactID == "" || v.artifactID != p.inline.want || p.cursor >= len(p.items) {
 		return nil
 	}
 	sel := p.items[p.cursor]
 	if sel.ID != v.artifactID || sel.ID == p.inline.artifactID {
 		return nil
 	}
-	previewer, ok := m.artifactViewer.(inlinePreviewer)
+	previewer, ok := p.deps.viewer.(inlinePreviewer)
 	if !ok {
 		return nil
 	}
+	if p.width == 0 || p.height == 0 {
+		// The host has not told us the window size yet (a popup
+		// right after start); wait another beat rather than
+		// rendering into a guessed box.
+		return debounceInline(v.artifactID)
+	}
 	var cmds []tea.Cmd
 	if p.inline.placement != nil {
-		cmds = append(cmds, m.queueTermSeq(p.inline.placement.Delete))
+		cmds = append(cmds, p.deps.queueSeq(p.inline.placement.Delete))
 	}
-	cols, rows := m.artifactPreviewBox()
+	cols, rows := p.previewBox()
 	id := viewer.NextKittyID(p.inline.lastID)
 	p.inline.lastID = id
 	p.inline.artifactID = sel.ID
@@ -148,10 +130,9 @@ func (m *Model) applyInlineDebounce(v artifactInlineDebounceMsg) tea.Cmd {
 }
 
 // applyInlineResult installs a finished render, ignoring results for
-// an artifact the cursor has since left.
-func (m *Model) applyInlineResult(v artifactInlineMsg) tea.Cmd {
-	p := &m.artifactPanel
-	if m.screen != ScreenArtifacts || v.artifactID != p.inline.artifactID {
+// an artifact the cursor has since left (or a picker since closed).
+func (p *artifactPicker) applyInlineResult(v artifactInlineMsg) tea.Cmd {
+	if v.artifactID == "" || v.artifactID != p.inline.artifactID {
 		return nil
 	}
 	p.inline.loading = false
@@ -161,25 +142,24 @@ func (m *Model) applyInlineResult(v artifactInlineMsg) tea.Cmd {
 	}
 	placement := v.placement
 	p.inline.placement = &placement
-	return m.queueTermSeq(placement.Transmit)
+	return p.deps.queueSeq(placement.Transmit)
 }
 
-// releaseInlinePreview frees the image when the picker closes.
-func (m *Model) releaseInlinePreview() tea.Cmd {
-	p := &m.artifactPanel
+// releaseInline frees the image when the picker closes.
+func (p *artifactPicker) releaseInline() tea.Cmd {
 	if p.inline.placement == nil {
 		return nil
 	}
 	seq := p.inline.placement.Delete
 	p.inline.placement = nil
 	p.inline.artifactID = ""
-	return m.queueTermSeq(seq)
+	return p.deps.queueSeq(seq)
 }
 
-// artifactPanelColumns splits the modal's inner width between the list
-// (left) and the preview (right).
-func (m *Model) artifactPanelColumns() (inner, left, right int) {
-	inner = m.width - 14
+// columns splits the body width between the list (left) and the
+// preview (right).
+func (p *artifactPicker) columns() (inner, left, right int) {
+	inner = p.width - p.deps.chromeW
 	if inner < 60 {
 		inner = 60
 	}
@@ -194,27 +174,27 @@ func (m *Model) artifactPanelColumns() (inner, left, right int) {
 	return inner, left, right
 }
 
-// artifactPreviewBox is the cell box the image is fitted into.
-func (m *Model) artifactPreviewBox() (cols, rows int) {
-	_, _, right := m.artifactPanelColumns()
-	rows = m.height - 13
+// previewBox is the cell box the image is fitted into.
+func (p *artifactPicker) previewBox() (cols, rows int) {
+	_, _, right := p.columns()
+	rows = p.height - p.deps.chromeH
 	if rows < 5 {
 		rows = 5
 	}
 	return right, rows
 }
 
-// renderArtifactInlinePane draws the right column: the placeholder grid
-// when an image is ready, otherwise the status or the reason inline
-// preview is unavailable.
-func (m *Model) renderArtifactInlinePane(width int) string {
-	st := m.artifactPanel.inline
-	muted := func(s string) string { return m.theme.MutedText.Render(s) }
+// renderInlinePane draws the right column: the placeholder grid when an
+// image is ready, otherwise the status or the reason inline preview is
+// unavailable.
+func (p *artifactPicker) renderInlinePane(width int) string {
+	st := p.inline
+	muted := func(s string) string { return p.deps.theme.MutedText.Render(s) }
 	switch {
 	case !st.supported:
 		return muted(wrapWords(st.reason, width))
 	case st.err != "":
-		return m.theme.AttentionTag.Render("✗ ") + muted(wrapWords(st.err, width-2))
+		return p.deps.theme.AttentionTag.Render("✗ ") + muted(wrapWords(st.err, width-2))
 	case st.loading:
 		return muted("rendering preview…")
 	case st.placement != nil:

@@ -252,17 +252,7 @@ func (m *Model) renderMCPBox(body string) string {
 // guarantees a consistent look — same border, padding, accent
 // colour, centred placement — even as new panels are added.
 func (m *Model) renderModalBox(body string) string {
-	width := m.width - 8
-	if width < 60 {
-		width = 60
-	}
-	box := lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(m.theme.Accent).
-		Padding(1, 2).
-		Width(width).
-		Render(body)
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+	return renderModalFrame(m.theme, m.width, m.height, body)
 }
 
 // renderMCPDetail formats the right-hand details column for a single

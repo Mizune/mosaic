@@ -125,16 +125,15 @@ type Model struct {
 	// artifacts maps sessionID → rich-content rows (mermaid / image /
 	// html / url), newest first. Refreshed alongside subagents.
 	artifacts map[string][]store.Artifact
-	// artifactPanel is the payload of ScreenArtifacts.
-	artifactPanel artifactPanelState
+	// artifactPanel is the payload of ScreenArtifacts (see
+	// artifact_picker.go; also hosted by the popup program).
+	artifactPanel artifactPicker
 	// artifactViewer opens artifacts outside the TUI (cmux browser
 	// pane or the OS browser). nil means opening is disabled.
 	artifactViewer artifactViewer
-	// termSeq holds raw terminal sequences (Kitty graphics transmit /
-	// delete) emitted at the start of the next frames; termSeqGen
-	// lets a late flush message skip sequences queued after it.
-	termSeq    string
-	termSeqGen int
+	// termSeqQueue holds raw terminal sequences (Kitty graphics
+	// transmit / delete) emitted at the start of the next frames.
+	termSeqQueue
 
 	cursor        int
 	groupExpanded map[string]bool
@@ -530,6 +529,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = v.Width, v.Height
+		m.artifactPanel.setSize(v.Width, v.Height)
 
 	case tea.KeyMsg:
 		return m.handleKey(v)
@@ -701,18 +701,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case recipeSaveResultMsg:
 		return m.applyRecipeSaveResultMsg(v)
 
-	case artifactOpenedMsg:
-		m.applyArtifactOpened(v)
-		return m, nil
-
-	case artifactInlineDebounceMsg:
-		return m, m.applyInlineDebounce(v)
-
-	case artifactInlineMsg:
-		return m, m.applyInlineResult(v)
+	case artifactOpenedMsg, artifactInlineDebounceMsg, artifactInlineMsg:
+		// Routed regardless of screen: an auto_open result must still
+		// toast on TOP, and a closed picker ignores stale previews.
+		_, notice, cmd := m.artifactPanel.updateMsg(v)
+		m.applyPickerNotice(notice)
+		return m, cmd
 
 	case termSeqFlushedMsg:
-		m.applyTermSeqFlushed(v)
+		m.applyFlushed(v)
 		return m, nil
 	}
 	return m, nil
@@ -721,11 +718,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // View renders the current screen, prefixed by any queued raw
 // terminal sequence (zero-width, so the layout is unaffected).
 func (m *Model) View() string {
-	out := m.renderScreen()
-	if m.termSeq != "" {
-		return m.termSeq + out
-	}
-	return out
+	return m.prefix(m.renderScreen())
 }
 
 // renderScreen dispatches to the screen-specific render function.
