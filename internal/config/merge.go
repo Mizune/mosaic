@@ -30,6 +30,7 @@ func Merge(base, override Config) Config {
 	out.Hooks = mergeHooks(base.Hooks, override.Hooks)
 	out.Discord = mergeDiscord(base.Discord, override.Discord)
 	out.Docker = mergeDocker(base.Docker, override.Docker)
+	out.Viewer = mergeViewer(base.Viewer, override.Viewer)
 	out.Projects = mergeProjects(base.Projects, override.Projects)
 	return out
 }
@@ -72,6 +73,37 @@ func mergeDocker(base, ov DockerSection) DockerSection {
 	}
 	if ov.AutoCleanup != nil {
 		out.AutoCleanup = ov.AutoCleanup
+	}
+	return out
+}
+
+// mergeViewer layers a project-local [viewer] override on top of the
+// global section, following mergeDocker: Enabled is *bool so an
+// explicit `enabled = false` wins over the default while nil inherits;
+// strings win when non-empty; the plain bools follow the file-wide
+// rule that only true overrides.
+func mergeViewer(base, ov ViewerSection) ViewerSection {
+	out := base
+	if ov.Enabled != nil {
+		out.Enabled = ov.Enabled
+	}
+	if ov.AutoOpen {
+		out.AutoOpen = true
+	}
+	if ov.MermaidJSURL != "" {
+		out.MermaidJSURL = ov.MermaidJSURL
+	}
+	if ov.Placement != "" {
+		out.Placement = ov.Placement
+	}
+	if ov.Focus {
+		out.Focus = true
+	}
+	if ov.Inline != "" {
+		out.Inline = ov.Inline
+	}
+	if ov.ChromePath != "" {
+		out.ChromePath = ov.ChromePath
 	}
 	return out
 }
