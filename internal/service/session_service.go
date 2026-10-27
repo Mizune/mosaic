@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Mizune/mosaic/internal/artifact"
 	"github.com/Mizune/mosaic/internal/bus"
 	"github.com/Mizune/mosaic/internal/config"
 	"github.com/Mizune/mosaic/internal/git"
@@ -404,6 +405,9 @@ func (s *SessionService) Kill(ctx context.Context, name string, opts KillOptions
 	if err := s.store.Sessions().Delete(ctx, row.ID); err != nil {
 		return err
 	}
+	// Generated viewer pages for this session are now orphaned;
+	// artifact rows went with the session via FK cascade.
+	_ = artifact.RemoveSessionCache(row.ID)
 	if s.bus != nil {
 		s.bus.Publish(bus.SessionStopped{SessionID: row.ID, At: time.Now()})
 	}
