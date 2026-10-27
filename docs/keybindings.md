@@ -63,6 +63,8 @@ Every binding listed here is overridable via `[ui.keymap]` in
 | Key | Action |
 |---|---|
 | `Ctrl+Q` | detach back to mosaic |
+| `prefix+D` | open `mosaic diff` for this session in a right-hand split |
+| `prefix+O` | open the artifact picker for this session in a popup (or a split, see `[viewer] tmux_viewer`) |
 | `Ctrl+B` … | standard tmux prefix — mosaic never touches it |
 
 The `Ctrl+Q` binding lives in the mosaic-managed tmux config at

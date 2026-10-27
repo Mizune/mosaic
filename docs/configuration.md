@@ -212,6 +212,8 @@ focus          = false
 mermaid_js_url = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"
 inline         = "auto"
 chrome_path    = ""
+tmux_viewer    = "popup"
+notify_tmux    = true
 ```
 
 | Key | Type | Default | Description |
@@ -223,6 +225,8 @@ chrome_path    = ""
 | `mermaid_js_url` | string | jsdelivr `mermaid@11` | Script URL loaded by generated Mermaid pages. Point it at a local `file://` copy of `mermaid.min.js` (the UMD build, not the ESM one) to render offline. |
 | `inline` | string | `"auto"` | Inline preview in the picker via the Kitty graphics protocol. `auto` enables it when the terminal advertises support (Ghostty, kitty, WezTerm) and, inside tmux, `allow-passthrough` is `on`; `on` skips the terminal check; `off` disables it. |
 | `chrome_path` | string | `""` | Chrome / Chromium binary used to rasterize Mermaid, HTML, SVG and URL artifacts for the inline preview. Empty auto-detects the macOS app bundles and `google-chrome` / `chromium` on `PATH`. |
+| `tmux_viewer` | string | `"popup"` | How `prefix+O` opens `mosaic artifacts` inside an attached session: `popup` (tmux `display-popup`) or `split` (a right-hand split pane). |
+| `notify_tmux` | bool | `true` | Show a five-second tmux status-line message in the session when a new artifact is detected while you are attached. |
 
 mosaic uses the cmux browser pane when `CMUX_SOCKET_PATH` is set and
 the `cmux` CLI is on `PATH`; the pane is reused for later artifacts.

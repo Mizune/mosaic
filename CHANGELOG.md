@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Inline artifact preview in the picker through the Kitty graphics
   protocol (Ghostty, kitty, WezTerm; tmux with `allow-passthrough on`),
   rasterizing Mermaid / HTML / SVG with a headless Chrome
+- `mosaic artifacts` and the tmux `prefix+O` binding: the artifact
+  picker in a popup (or split) inside an attached session, with inline
+  preview through two tmux layers, plus a status-line notice when a new
+  artifact is detected (`[viewer] tmux_viewer`, `notify_tmux`)
 - Full lazygit-style TUI with structured preview, sub-agent
   inline rows, attention pulse, and 4-mode right pane (Tab
   cycles structured / live / sub-agents / diff)
@@ -40,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The mosaic-managed tmux config now sets `allow-passthrough all` (was
+  `on`) so inline images also work from a popup
 - Session status defaults to `idle`; reconciler flips to
   `running` / back to `idle` based on real activity instead of
   marking every new session as running

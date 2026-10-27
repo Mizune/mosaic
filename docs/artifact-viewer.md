@@ -58,6 +58,28 @@ ones are instant. `Enter` still opens the full-fidelity version in a
 browser pane or browser. Set `[viewer] inline = "off"` to keep the
 picker text-only.
 
+## While attached
+
+Detection keeps running while you are inside a session, but the TUI's
+badge is out of sight. Two things bridge that gap:
+
+- **`prefix+O`** opens the same picker for the current session in a
+  tmux popup (`mosaic artifacts`), so you can look at a diagram without
+  detaching. `[viewer] tmux_viewer = "split"` opens a right-hand split
+  instead. The popup polls the store every two seconds, so artifacts
+  that land while it is open appear without losing your selection.
+- **A status-line notice** (`◆ graph TD — prefix+O to view`) shows for
+  five seconds in the session when a new artifact is detected. Turn it
+  off with `[viewer] notify_tmux = false`.
+
+Inline preview works there too, through both tmux servers (your own
+tmux, if you run mosaic in one, and mosaic's): mosaic's server already
+allows passthrough; your own needs `allow-passthrough on` as above.
+The session is resolved from the pane you are in, so `mosaic artifacts`
+needs no arguments inside a session and takes a session name elsewhere.
+Like `mosaic diff`, the popup reads the global config only, not a
+project's `.mosaic/config.toml`.
+
 ## Where it opens
 
 Inside **cmux** (`CMUX_SOCKET_PATH` set, `cmux` CLI on `PATH`) mosaic

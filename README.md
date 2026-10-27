@@ -71,9 +71,9 @@ vhs docs/assets/diff-view.tape    # Diff View + hunk stage + commit
   clipboard yank, and filename fuzzy search.
 - **Artifact viewer** — Mermaid diagrams, screenshots and HTML
   reports an agent produces are detected from its transcript and
-  previewed inline in the picker (`o`) on Kitty-graphics terminals
-  such as Ghostty, or opened at full fidelity in a cmux browser pane
-  or the OS browser.
+  previewed inline in the picker (`o`, or `prefix+O` while attached)
+  on Kitty-graphics terminals such as Ghostty, or opened at full
+  fidelity in a cmux browser pane or the OS browser.
 - **First-class polish** — 5 built-in themes, full keymap
   override via config, multi-select with visual mode, trace/pprof
   flags, Homebrew tap release pipeline, first-run onboarding
