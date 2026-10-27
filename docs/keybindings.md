@@ -28,6 +28,7 @@ Every binding listed here is overridable via `[ui.keymap]` in
 | `f` | quick fork (auto-name + same setup) |
 | `K` | kill (single row, or whole selection) |
 | `d` | open Diff View |
+| `o` | open artifact picker (mermaid / images / html → browser pane) |
 | `c` | open Conductor Panel |
 | `m` | open MCP Manager |
 | `s` | open Skill Manager |
@@ -124,6 +125,31 @@ so upgrades pick up the latest defaults automatically.
 | `Y` | replay the selected conductor from its stored plan path |
 | `R` | refresh |
 | `q` / `Esc` | close |
+
+## Artifact picker (`o`)
+
+Lists the rich content detected for the focused session — Mermaid
+blocks in the agent's replies and image / HTML files it wrote — and
+opens the selected item in a cmux browser pane (or the OS browser
+outside cmux). See [artifact-viewer.md](artifact-viewer.md).
+
+| Key | Action |
+|---|---|
+| `j` / `k` | move cursor |
+| `Enter` | open the selected artifact in the viewer |
+| `j` / `k` (moving) | render the selected artifact inline in the right column when the terminal supports Kitty graphics |
+| `+` | open a path or URL by hand (the only route for Codex / Gemini sessions) |
+| `R` | refresh the list |
+| `q` / `Esc` | close |
+
+Inside the `+` input:
+
+| Key | Action |
+|---|---|
+| `Tab` | complete the path against the filesystem |
+| `Ctrl+U` | clear the input |
+| `Enter` | validate, remember as a manual artifact, and open |
+| `Esc` | cancel the input (the picker stays open) |
 
 ## MCP / Skill Manager (`m`, `s`)
 

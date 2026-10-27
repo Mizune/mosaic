@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Artifact viewer: Mermaid blocks and image / HTML files written by
+  an agent are detected from Claude Code transcripts, listed per
+  session (`o`, badge in the preview tab strip) and opened in a cmux
+  browser pane or the OS browser; `[viewer]` config with `auto_open`
+- Inline artifact preview in the picker through the Kitty graphics
+  protocol (Ghostty, kitty, WezTerm; tmux with `allow-passthrough on`),
+  rasterizing Mermaid / HTML / SVG with a headless Chrome
 - Full lazygit-style TUI with structured preview, sub-agent
   inline rows, attention pulse, and 4-mode right pane (Tab
   cycles structured / live / sub-agents / diff)

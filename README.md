@@ -69,6 +69,11 @@ vhs docs/assets/diff-view.tape    # Diff View + hunk stage + commit
 - **Diff view** — lazygit-style file list + chroma-highlighted
   unified diff, with hunk-level staging, inline commit + amend,
   clipboard yank, and filename fuzzy search.
+- **Artifact viewer** — Mermaid diagrams, screenshots and HTML
+  reports an agent produces are detected from its transcript and
+  previewed inline in the picker (`o`) on Kitty-graphics terminals
+  such as Ghostty, or opened at full fidelity in a cmux browser pane
+  or the OS browser.
 - **First-class polish** — 5 built-in themes, full keymap
   override via config, multi-select with visual mode, trace/pprof
   flags, Homebrew tap release pipeline, first-run onboarding
@@ -155,6 +160,7 @@ See [docs/keybindings.md](docs/keybindings.md) for the full keymap.
 | [docs/themes.md](docs/themes.md) | Built-in themes + writing custom ones |
 | [docs/diff-view.md](docs/diff-view.md) | Diff View: hunk stage, commit, yank, search |
 | [docs/conductor.md](docs/conductor.md) | Writing and running plan.toml DAGs |
+| [docs/artifact-viewer.md](docs/artifact-viewer.md) | Viewing Mermaid / images / HTML from agent sessions |
 | [docs/hooks.md](docs/hooks.md) | Claude Code hook integration |
 | [docs/worktrees.md](docs/worktrees.md) | Declarative worktree setup recipes |
 | [docs/architecture.md](docs/architecture.md) | How the pieces fit together |
@@ -181,6 +187,7 @@ See [docs/keybindings.md](docs/keybindings.md) for the full keymap.
 | goreleaser releases | ✅ | tag → GitHub release via goreleaser |
 | Performance budget | ✅ | `mosaic doctor --bench` |
 | Hunk-level staging | ✅ | `H` in Diff View |
+| Artifact viewer | ✅ | mermaid / image / html detection + inline Kitty graphics preview + browser |
 
 ## Development
 

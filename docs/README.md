@@ -8,6 +8,7 @@
 | [themes.md](themes.md) | Built-in themes, first-run wizard preview, custom theme instructions |
 | [diff-view.md](diff-view.md) | Diff View guide — browse, filter, search, hunk stage, commit, amend, yank |
 | [conductor.md](conductor.md) | Writing and running plan.toml DAGs |
+| [artifact-viewer.md](artifact-viewer.md) | Viewing Mermaid diagrams, images and HTML from agent sessions |
 | [hooks.md](hooks.md) | Claude Code hook integration |
 | [worktrees.md](worktrees.md) | Declarative worktree setup recipes |
 | [next-codex-work.md](next-codex-work.md) | Handoff plan for Codex session-start, MCP, and Skill work |
