@@ -49,7 +49,7 @@ type runtime struct {
 	paths    mosaicpath.Paths
 	config   config.Config
 	store    *store.Store
-	tmux     tmux.Backend
+	tmux     *tmux.CLI
 	bus      *bus.Bus
 	sessions *service.SessionService
 
@@ -144,6 +144,9 @@ func openRuntime(ctx context.Context, opts runtimeOptions) (*runtime, error) {
 	sessionSvc.Cfg.Docker = res.Config.Docker
 	sessionSvc.Cfg.Worktree = res.Config.Worktree
 	sessionSvc.Cfg.Projects = res.Config.Projects
+	// The TUI's own tmux, if any, is published to mosaic's server at
+	// attach time so popups under two tmux layers can draw inline.
+	sessionSvc.Cfg.OuterTmux = os.Getenv("TMUX")
 	rt := &runtime{
 		paths:     paths,
 		config:    res.Config,
