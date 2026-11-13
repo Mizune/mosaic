@@ -91,9 +91,16 @@ vhs docs/assets/diff-view.tape    # Diff View + hunk stage + commit
 ### Homebrew (recommended)
 
 ```bash
-brew install Mizune/tap/mosaic
+brew tap mizune/tap
+brew trust --formula mizune/tap/mosaic
+brew install mizune/tap/mosaic
 mosaic doctor
 ```
+
+Homebrew only loads formulae from third-party taps you have trusted,
+so the `brew trust` line is needed once after `brew tap`. Homebrew
+also has an unrelated `mosaic` cask, so always use the full name, for
+example `brew upgrade mizune/tap/mosaic`.
 
 ### Pre-built binaries
 
