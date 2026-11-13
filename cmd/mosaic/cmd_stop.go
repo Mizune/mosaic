@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Mizune/mosaic/internal/hook"
-	"github.com/Mizune/mosaic/internal/tmux"
 )
 
 // newStopCmd builds `mosaic stop`. It is the "turn everything off"
@@ -102,13 +101,12 @@ sessions are gone on the next refresh and mark them "stopped".`,
 }
 
 // killTmuxServer runs `tmux -L mosaic kill-server` via the shared
-// CLI wrapper. Fake tmux backends (tests) are a no-op.
+// CLI wrapper. A runtime without a tmux CLI (tests) is a no-op.
 func killTmuxServer(ctx context.Context, rt *runtime) error {
-	cli, ok := rt.tmux.(*tmux.CLI)
-	if !ok {
+	if rt.tmux == nil {
 		return nil
 	}
-	return cli.KillServer(ctx)
+	return rt.tmux.KillServer(ctx)
 }
 
 // pruneHookSockets removes every /tmp/mosaic-<uid>/pid-* file

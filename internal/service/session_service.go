@@ -12,12 +12,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/Mizune/mosaic/internal/artifact"
 	"github.com/Mizune/mosaic/internal/bus"
 	"github.com/Mizune/mosaic/internal/config"
 	"github.com/Mizune/mosaic/internal/git"
@@ -56,6 +58,12 @@ type SessionServiceConfig struct {
 	// creates exports MOSAIC_SOCKET_PATH into the agent's env.
 	// Left empty in CLI-only commands where no hook server runs.
 	HookSocketPath string
+
+	// OuterTmux is the TUI's own $TMUX value ("socket,pid,index"), or
+	// empty when the TUI runs outside tmux. AttachCommand publishes it
+	// to mosaic's tmux server as MOSAIC_OUTER_TMUX so a popup or split
+	// inside the attached session knows it sits under two servers.
+	OuterTmux string
 
 	// DiffBaseBranch is the fallback ref the Diff helpers compare
 	// against when a session row has no explicit base.
@@ -404,6 +412,9 @@ func (s *SessionService) Kill(ctx context.Context, name string, opts KillOptions
 	if err := s.store.Sessions().Delete(ctx, row.ID); err != nil {
 		return err
 	}
+	// Generated viewer pages for this session are now orphaned;
+	// artifact rows went with the session via FK cascade.
+	_ = artifact.RemoveSessionCache(row.ID)
 	if s.bus != nil {
 		s.bus.Publish(bus.SessionStopped{SessionID: row.ID, At: time.Now()})
 	}
@@ -558,6 +569,12 @@ func (s *SessionService) AttachCommand(ctx context.Context, name string) (*exec.
 	}
 	if err := s.doRespawn(ctx, row); err != nil {
 		return nil, err
+	}
+	// Refresh the outer-tmux hint on every attach so it reflects the
+	// client that is attaching now, not a previous one. Best effort:
+	// a failure only degrades inline previews inside the session.
+	if err := s.tmux.SetGlobalEnv(ctx, "MOSAIC_OUTER_TMUX", s.Cfg.OuterTmux); err != nil {
+		slog.Warn("publish MOSAIC_OUTER_TMUX", "err", err)
 	}
 	return s.tmux.AttachCommand(row.TmuxSession), nil
 }

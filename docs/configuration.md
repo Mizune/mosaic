@@ -46,6 +46,9 @@ mosaic doctor --print-config
 
 [hooks]
 # ...
+
+[viewer]
+# ...
 ```
 
 ## `[mosaic]` — global runtime
@@ -123,7 +126,7 @@ Supported binding names (aliases with `-` or `_` both accepted):
 ```
 up, down, left, right, back,
 quit, new, attach, kill, refresh, help, filter,
-mcp_manager, skill_manager, settings, conductor, diff,
+mcp_manager, skill_manager, settings, conductor, diff, artifacts,
 toggle_select, clear_select, select_all, fork,
 filter_waiting, filter_running, filter_idle, filter_error, filter_all,
 next_attention, dismiss_attention, error_log,
@@ -193,6 +196,44 @@ events    = []              # reserved; not wired yet
 Claude hooks live in `~/.claude/settings.json`; Codex hooks live in
 `~/.codex/hooks.json`. Manage them with `mosaic hook install --tool
 claude` or `mosaic hook install --tool codex`. See [hooks.md](hooks.md).
+
+## `[viewer]` — artifact viewer
+
+Controls how the artifact picker (`o`) shows Mermaid diagrams, images
+and HTML files produced by an agent. See
+[artifact-viewer.md](artifact-viewer.md) for the feature guide.
+
+```toml
+[viewer]
+enabled        = true
+auto_open      = false
+placement      = "dock"
+focus          = false
+mermaid_js_url = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"
+inline         = "auto"
+chrome_path    = ""
+tmux_viewer    = "popup"
+notify_tmux    = true
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `true` | When `false`, the picker still lists artifacts but `Enter` only shows a "viewer disabled" toast. |
+| `auto_open` | bool | `false` | Open every newly detected artifact as soon as it appears. Artifacts replayed from a transcript at startup never auto-open. |
+| `placement` | string | `"dock"` | Where cmux opens the browser pane: `dock` (right-hand sidebar Dock), `right` or `down` (a split of the current workspace). Ignored outside cmux. |
+| `focus` | bool | `false` | Move keyboard focus to the browser pane when it opens. |
+| `mermaid_js_url` | string | jsdelivr `mermaid@11` | Script URL loaded by generated Mermaid pages. Point it at a local `file://` copy of `mermaid.min.js` (the UMD build, not the ESM one) to render offline. |
+| `inline` | string | `"auto"` | Inline preview in the picker via the Kitty graphics protocol. `auto` enables it when the terminal advertises support (Ghostty, kitty, WezTerm) and, inside tmux, `allow-passthrough` is `on`; `on` skips the terminal check; `off` disables it. |
+| `chrome_path` | string | `""` | Chrome / Chromium binary used to rasterize Mermaid, HTML, SVG and URL artifacts for the inline preview. Empty auto-detects the macOS app bundles and `google-chrome` / `chromium` on `PATH`. |
+| `tmux_viewer` | string | `"popup"` | How `prefix+O` opens `mosaic artifacts` inside an attached session: `popup` (tmux `display-popup`) or `split` (a right-hand split pane). |
+| `notify_tmux` | bool | `true` | Show a five-second tmux status-line message in the session when a new artifact is detected while you are attached. |
+
+mosaic uses the cmux browser pane when `CMUX_SOCKET_PATH` is set and
+the `cmux` CLI is on `PATH`; the pane is reused for later artifacts.
+Everywhere else it falls back to `open` (macOS) or `xdg-open` (Linux).
+Generated pages live under `~/Library/Caches/mosaic/artifacts/<session>/`
+(or `$XDG_CACHE_HOME/mosaic/artifacts/`) and are removed when the
+session is killed.
 
 ## Example `config.toml`
 

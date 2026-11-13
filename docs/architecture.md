@@ -50,6 +50,7 @@ state.db                    copy + setup    projects/      pid-<pid>
 | `internal/claudeio` | Claude Code JSONL paths, transcript watcher (fsnotify + byte-offset tail), sub-agent state machine, prompt detector, OSC 777 / 9;4 scanner. |
 | `internal/hook` | `~/.claude/settings.json` installer, unix socket server, wire protocol decoder, blocking-notification classifier. |
 | `internal/live` | The glue: subscribes to the bus, runs sub-agent state machines, binds mosaic sessions to Claude session ids (via `live.Binder`), and persists attention / status into the store via `live.Reconciler`. |
+| `internal/artifact` | Detects rich content in transcript entries: ```mermaid fences in assistant text and image / HTML files named by `Write` / `Edit` tool calls. Content-hashed so transcript replay is idempotent. |
 
 ### Conductor
 
@@ -63,6 +64,7 @@ state.db                    copy + setup    projects/      pid-<pid>
 |---|---|
 | `internal/mcp` | MCP server discovery from `~/.claude.json`. Env values are dropped at the package boundary so secrets never leak. |
 | `internal/skill` | Claude Code skill discovery from `~/.claude/skills/*/SKILL.md` (YAML frontmatter parser). |
+| `internal/viewer` | Opens artifacts outside the TUI (cmux browser pane reused via `cmux browser goto`, or the OS browser) and prepares inline previews: headless-Chrome rasterization to PNG plus Kitty graphics encoding with Unicode placeholders (tmux passthrough aware). Writes pages and cached PNGs under the user cache dir. |
 
 ### TUI
 
@@ -137,6 +139,25 @@ Latency: typically 5–15ms end-to-end. `nc -U` does a single
 round-trip to a unix socket; there is no JSON parsing for busy
 events and a single `json.Unmarshal` for notifications.
 
+## Data flow for an artifact
+
+```
+ Claude writes an assistant entry with a ```mermaid block, or a Write of report.html
+                    │
+                    ▼ bus.Publish(TranscriptEntry)   (same watcher path as above)
+ live.Reconciler.recordArtifacts → artifact.DetectFromEntry
+                    │
+                    ├──→ store.Artifacts().Upsert   UNIQUE(session_id, content_hash)
+                    │     → replayed entries insert nothing
+                    └──→ bus.Publish(live.ArtifactDetected)   only for NEW rows
+                                      │
+                                      ▼ TUI refresh → m.artifacts[sessionID]
+                    "◆ 2 artifacts" badge · `o` picker · [viewer] auto_open
+                                      │
+                                      ▼ viewer.TargetURL → file:// page or URL
+                    viewer.Launcher.Open: Cmux (new-pane --type browser / goto) or System (open)
+```
+
 ## Screen graph
 
 ```
@@ -155,6 +176,7 @@ events and a single `json.Unmarshal` for notifications.
                                              ScreenMCP      ScreenSettings
                                              ScreenSkill    ScreenErrorLog
                                              ScreenProfile  ScreenFirstRun
+                                             ScreenArtifacts
 ```
 
 Each modal is a single tea.Model state machine routed through

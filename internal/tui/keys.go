@@ -21,16 +21,17 @@ type keyMap struct {
 	Refresh      []string
 	Help         []string
 	Filter       []string
-	MCPManager    []string
-	SkillManager  []string
-	Settings      []string
-	Conductor     []string
-	Diff          []string
-	ToggleSelect  []string
-	ClearSelect   []string
-	SelectAll     []string
-	Fork          []string
-	Respawn       []string
+	MCPManager   []string
+	SkillManager []string
+	Settings     []string
+	Conductor    []string
+	Diff         []string
+	Artifacts    []string
+	ToggleSelect []string
+	ClearSelect  []string
+	SelectAll    []string
+	Fork         []string
+	Respawn      []string
 
 	// Filter tabs (! @ # $).
 	FilterWaiting []string
@@ -70,6 +71,7 @@ func defaultKeys() keyMap {
 		Settings:     []string{","},
 		Conductor:    []string{"c"},
 		Diff:         []string{"d"},
+		Artifacts:    []string{"o"},
 		ToggleSelect: []string{" "},
 		ClearSelect:  []string{"ctrl+\\"},
 		SelectAll:    []string{"*"},
@@ -155,6 +157,8 @@ func (k *keyMap) applyOverrides(overrides map[string]string) {
 			k.Conductor = chords
 		case "diff":
 			k.Diff = chords
+		case "artifacts":
+			k.Artifacts = chords
 		case "toggle_select":
 			k.ToggleSelect = chords
 		case "clear_select":

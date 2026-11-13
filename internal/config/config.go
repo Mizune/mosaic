@@ -35,6 +35,12 @@ type Config struct {
 	// session events into per-session threads.
 	Discord DiscordSection `toml:"discord"`
 
+	// Viewer holds the [viewer] table that controls the artifact
+	// viewer: how Mermaid diagrams, images and HTML files an agent
+	// produced are opened (a cmux browser pane inside cmux, the OS
+	// default browser elsewhere).
+	Viewer ViewerSection `toml:"viewer"`
+
 	// Projects is a user-maintained registry of named project
 	// directories. The TUI wizard and the new-session CLI both
 	// consult this list so users do not have to type (or even
@@ -388,6 +394,67 @@ type DiscordSection struct {
 	AllowedUserIDs []string `toml:"allowed_user_ids"`
 }
 
+// DefaultMermaidJSURL is the Mermaid build generated diagram pages
+// load when [viewer] mermaid_js_url is not set. It must be the classic
+// (UMD) bundle: file:// pages cannot import ES modules in WebKit.
+const DefaultMermaidJSURL = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"
+
+// ViewerSection holds the [viewer] table that configures the artifact
+// viewer. Inside cmux (CMUX_SOCKET_PATH set and the cmux CLI on PATH)
+// artifacts open in a cmux browser pane; elsewhere they open in the OS
+// default browser via `open` / `xdg-open`.
+type ViewerSection struct {
+	// Enabled gates the whole feature. When false the artifact key
+	// only shows a "viewer disabled" toast. Nullable (*bool) so a
+	// project file can set `enabled = false` without the TOML decoder
+	// confusing it with "key absent"; read via [BoolOr] with a true
+	// fallback.
+	Enabled *bool `toml:"enabled"`
+
+	// AutoOpen opens every newly detected artifact without a key
+	// press. Artifacts replayed from a transcript at startup never
+	// auto-open. Defaults to false.
+	AutoOpen bool `toml:"auto_open"`
+
+	// MermaidJSURL is the script URL generated Mermaid pages load.
+	// Point it at a local file:// copy of mermaid.min.js (the UMD
+	// build, not the ESM one) to render diagrams offline. Defaults to
+	// [DefaultMermaidJSURL].
+	MermaidJSURL string `toml:"mermaid_js_url"`
+
+	// Placement is where cmux opens the browser pane: "dock" (the
+	// right-hand sidebar Dock, default), "right" or "down" (a split
+	// of the current workspace). Unknown values behave like "dock".
+	// Ignored outside cmux.
+	Placement string `toml:"placement"`
+
+	// Focus moves keyboard focus to the browser pane when it opens.
+	// Defaults to false so the TUI keeps the keyboard.
+	Focus bool `toml:"focus"`
+
+	// Inline controls the Kitty-graphics preview inside the artifact
+	// picker: "auto" (default) enables it when the terminal advertises
+	// Kitty graphics (Ghostty, kitty, WezTerm) and, inside tmux,
+	// allow-passthrough is on; "on" skips the terminal check; "off"
+	// disables the preview.
+	Inline string `toml:"inline"`
+
+	// ChromePath overrides the Chrome / Chromium binary that rasterizes
+	// Mermaid, HTML, SVG and URL artifacts for the inline preview.
+	// Empty means auto-detect.
+	ChromePath string `toml:"chrome_path"`
+
+	// TmuxViewer selects how prefix+O opens the artifact viewer inside
+	// an attached session: "popup" (tmux display-popup, default) or
+	// "split" (a right-hand split pane).
+	TmuxViewer string `toml:"tmux_viewer"`
+
+	// NotifyTmux shows a short tmux status-line message in the session
+	// when a new artifact is detected while you are attached. Nullable
+	// like Enabled; defaults to true.
+	NotifyTmux *bool `toml:"notify_tmux"`
+}
+
 // Default returns the built-in defaults applied before any user config
 // is layered on. Every Config value passed through [Load] starts from
 // these defaults.
@@ -445,6 +512,17 @@ func Default() Config {
 			MountGh:     BoolPtr(true),
 			MountSSH:    BoolPtr(true),
 			AutoCleanup: BoolPtr(true),
+		},
+		Viewer: ViewerSection{
+			// Enabled is a *bool for the same reason as the
+			// [docker] toggles: a project override can turn the
+			// viewer off without restating every other key.
+			Enabled:      BoolPtr(true),
+			MermaidJSURL: DefaultMermaidJSURL,
+			Placement:    "dock",
+			Inline:       "auto",
+			TmuxViewer:   "popup",
+			NotifyTmux:   BoolPtr(true),
 		},
 	}
 }

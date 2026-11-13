@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"sync"
+	"time"
 )
 
 // Fake is an in-memory [Backend] used by tests that need to exercise
@@ -13,10 +14,19 @@ import (
 // Fake is safe for concurrent use; tests typically share one instance
 // across goroutines.
 type Fake struct {
-	mu       sync.Mutex
-	sessions map[string]FakeSession
-	captures map[string]string
-	failNext map[string]error
+	mu        sync.Mutex
+	sessions  map[string]FakeSession
+	captures  map[string]string
+	failNext  map[string]error
+	globalEnv map[string]string
+	messages  []FakeMessage
+}
+
+// FakeMessage records one DisplayMessage call.
+type FakeMessage struct {
+	Target string
+	Text   string
+	Delay  time.Duration
 }
 
 // FakeSession records the arguments passed to NewSession so tests can
@@ -33,9 +43,10 @@ type FakeSession struct {
 // NewFake constructs a Fake with empty internal maps.
 func NewFake() *Fake {
 	return &Fake{
-		sessions: make(map[string]FakeSession),
-		captures: make(map[string]string),
-		failNext: make(map[string]error),
+		sessions:  make(map[string]FakeSession),
+		captures:  make(map[string]string),
+		failNext:  make(map[string]error),
+		globalEnv: make(map[string]string),
 	}
 }
 
@@ -171,4 +182,54 @@ func (f *Fake) SendKeys(_ context.Context, name, keys string, _ bool) error {
 	sess.SentKeys = append(sess.SentKeys, keys)
 	f.sessions[name] = sess
 	return nil
+}
+
+// SetGlobalEnv implements [Backend.SetGlobalEnv]; an empty value
+// removes the variable. FailOnce tag: "setenv".
+func (f *Fake) SetGlobalEnv(_ context.Context, name, value string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.consumeFailure("setenv"); err != nil {
+		return err
+	}
+	if value == "" {
+		delete(f.globalEnv, name)
+		return nil
+	}
+	f.globalEnv[name] = value
+	return nil
+}
+
+// DisplayMessage implements [Backend.DisplayMessage]. Like the CLI it
+// silently drops a message for an unknown target. FailOnce tag:
+// "message".
+func (f *Fake) DisplayMessage(_ context.Context, target, text string, delay time.Duration) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.consumeFailure("message"); err != nil {
+		return err
+	}
+	if _, ok := f.sessions[target]; !ok {
+		return nil
+	}
+	f.messages = append(f.messages, FakeMessage{Target: target, Text: text, Delay: delay})
+	return nil
+}
+
+// GlobalEnv returns a copy of the variables set through SetGlobalEnv.
+func (f *Fake) GlobalEnv() map[string]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]string, len(f.globalEnv))
+	for k, v := range f.globalEnv {
+		out[k] = v
+	}
+	return out
+}
+
+// Messages returns a copy of every recorded DisplayMessage call.
+func (f *Fake) Messages() []FakeMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]FakeMessage(nil), f.messages...)
 }

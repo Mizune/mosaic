@@ -229,6 +229,7 @@ func (r *Reconciler) handleEntry(ctx context.Context, ev claudeio.TranscriptEntr
 		r.log.Warn("upsert subagent", "err", err)
 		return
 	}
+	r.recordArtifacts(ctx, parent, ev)
 
 	// Re-apply metadata when it becomes available. The initial
 	// Upsert (from SubagentSpawned) often runs before the parent's
@@ -376,6 +377,7 @@ func (r *Reconciler) applyParentEntry(ctx context.Context, ev claudeio.Transcrip
 	if !ok {
 		return
 	}
+	r.recordArtifacts(ctx, parent, ev)
 	sm := r.machineFor(ev.SessionID, "")
 	sm.Observe(ev.Entry)
 	snap := sm.Snapshot()

@@ -49,7 +49,7 @@ type runtime struct {
 	paths    mosaicpath.Paths
 	config   config.Config
 	store    *store.Store
-	tmux     tmux.Backend
+	tmux     *tmux.CLI
 	bus      *bus.Bus
 	sessions *service.SessionService
 
@@ -58,6 +58,7 @@ type runtime struct {
 	watcher    *claudeio.Watcher
 	hookServer *hook.Server
 	reconciler *live.Reconciler
+	notifier   *live.ArtifactNotifier
 	binder     *live.Binder
 	messaging  *service.MessagingService
 	discord    *discord.Bridge
@@ -123,7 +124,9 @@ func openRuntime(ctx context.Context, opts runtimeOptions) (*runtime, error) {
 	// new bindings without a kill-server. Both steps are best
 	// effort: worst case the user has to use the tmux prefix to
 	// detach.
-	if err := tmux.EnsureConfigFile(paths.TmuxConfigFile); err == nil {
+	if err := tmux.EnsureConfigFile(paths.TmuxConfigFile, tmux.ConfigOptions{
+		ArtifactViewer: res.Config.Viewer.TmuxViewer,
+	}); err == nil {
 		tmuxBackend.ConfigFile = paths.TmuxConfigFile
 		_ = tmuxBackend.SourceConfig(ctx)
 	}
@@ -142,6 +145,9 @@ func openRuntime(ctx context.Context, opts runtimeOptions) (*runtime, error) {
 	sessionSvc.Cfg.Docker = res.Config.Docker
 	sessionSvc.Cfg.Worktree = res.Config.Worktree
 	sessionSvc.Cfg.Projects = res.Config.Projects
+	// The TUI's own tmux, if any, is published to mosaic's server at
+	// attach time so popups under two tmux layers can draw inline.
+	sessionSvc.Cfg.OuterTmux = os.Getenv("TMUX")
 	rt := &runtime{
 		paths:     paths,
 		config:    res.Config,
@@ -201,6 +207,14 @@ func (r *runtime) startLive(ctx context.Context, home string) error {
 	}
 	r.reconciler = live.NewReconciler(r.store, r.bus, recOpts...)
 	r.reconciler.Start()
+
+	// Status-line notification inside an attached session when a
+	// new artifact is detected; the attached user cannot see the
+	// TUI's badge.
+	if config.BoolOr(r.config.Viewer.NotifyTmux, true) {
+		r.notifier = live.NewArtifactNotifier(r.store, r.bus, r.tmux)
+		r.notifier.Start()
+	}
 
 	r.binder = live.NewBinder(r.store, r.watcher, home)
 	r.binder.Start(cctx)
@@ -271,6 +285,9 @@ func (r *runtime) Close() error {
 		r.binder = nil
 	}
 	if r.reconciler != nil {
+		if r.notifier != nil {
+			r.notifier.Stop()
+		}
 		r.reconciler.Stop()
 		r.reconciler = nil
 	}

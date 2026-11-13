@@ -30,6 +30,7 @@ type Store struct {
 	conductors    *ConductorsRepo
 	sessionMCPs   *SessionMCPsRepo
 	sessionSkills *SessionSkillsRepo
+	artifacts     *ArtifactsRepo
 }
 
 // Open opens the SQLite database at path with the connection settings
@@ -60,6 +61,7 @@ func Open(path string) (*Store, error) {
 	s.conductors = newConductorsRepo(db)
 	s.sessionMCPs = newSessionMCPsRepo(db)
 	s.sessionSkills = newSessionSkillsRepo(db)
+	s.artifacts = newArtifactsRepo(db)
 	return s, nil
 }
 
@@ -107,6 +109,11 @@ func (s *Store) SessionMCPs() *SessionMCPsRepo {
 // SessionSkills returns the session ↔ skill attachment repository.
 func (s *Store) SessionSkills() *SessionSkillsRepo {
 	return s.sessionSkills
+}
+
+// Artifacts returns the per-session rich-content (artifact) repository.
+func (s *Store) Artifacts() *ArtifactsRepo {
+	return s.artifacts
 }
 
 // WALCheckpoint forces a WAL checkpoint so the -wal file is truncated
