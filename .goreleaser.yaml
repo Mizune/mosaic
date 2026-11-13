@@ -62,8 +62,11 @@ brews:
     homepage: "https://github.com/Mizune/mosaic"
     description: "TUI command center for running 10+ AI coding agents in parallel"
     license: "MIT"
+    # Formula downloads are not quarantined, so this is only a safety
+    # net for the unsigned binary. The installed file is read-only and
+    # the step can be denied, so a failure must not fail the install.
     post_install: |
-      system "xattr", "-cr", bin/"mosaic"
+      quiet_system "xattr", "-d", "com.apple.quarantine", bin/"mosaic" if OS.mac?
     test: |
       system "#{bin}/mosaic", "--version"
 
