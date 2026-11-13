@@ -60,6 +60,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- After a reboot, attaching to a session no longer fails with
+  `error connecting to … (No such file or directory)`: newer tmux
+  (3.8) reports a missing server that way, and mosaic now treats it
+  (and a stale socket's `Connection refused`) as "no server" and
+  respawns the session
 - OSC suppression: the same OSC sequence sitting in the tmux
   visible buffer no longer re-fires attention after the user
   dismisses it via a hook
