@@ -233,7 +233,7 @@ func (c *CLI) Kill(ctx context.Context, name string) error {
 func (c *CLI) List(ctx context.Context) ([]string, error) {
 	out, err := c.run(ctx, "list-sessions", "-F", "#S")
 	if err != nil {
-		if errors.Is(err, errTmuxNoServer) || errors.Is(err, errTmuxNoSession) {
+		if IsNotFound(err) {
 			return nil, nil
 		}
 		return nil, err
@@ -293,18 +293,37 @@ func (c *CLI) run(ctx context.Context, args ...string) (string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		text := strings.ToLower(strings.TrimSpace(stderr.String()))
-		switch {
-		case strings.Contains(text, "no server running"):
-			return "", errTmuxNoServer
-		case strings.Contains(text, "can't find session"),
-			strings.Contains(text, "session not found"),
-			strings.Contains(text, "no such session"):
-			return "", errTmuxNoSession
+		if sentinel := classifyStderr(stderr.String()); sentinel != nil {
+			return "", sentinel
 		}
 		return "", fmt.Errorf("tmux %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.String(), nil
+}
+
+// classifyStderr maps tmux's stderr to a sentinel error, or nil when
+// the failure is not a "no server / no session" state.
+//
+// Newer tmux (seen on 3.8) reports a missing server as
+// "error connecting to <socket> (No such file or directory)" instead
+// of "no server running", which is exactly what happens after a
+// reboot wipes the socket directory. A stale socket left by a crashed
+// server shows up as "(Connection refused)".
+func classifyStderr(stderr string) error {
+	text := strings.ToLower(strings.TrimSpace(stderr))
+	switch {
+	case strings.Contains(text, "no server running"):
+		return errTmuxNoServer
+	case strings.Contains(text, "error connecting to") &&
+		(strings.Contains(text, "no such file or directory") ||
+			strings.Contains(text, "connection refused")):
+		return errTmuxNoServer
+	case strings.Contains(text, "can't find session"),
+		strings.Contains(text, "session not found"),
+		strings.Contains(text, "no such session"):
+		return errTmuxNoSession
+	}
+	return nil
 }
 
 func (c *CLI) command(ctx context.Context, args ...string) *exec.Cmd {
